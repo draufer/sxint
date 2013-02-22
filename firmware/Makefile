@@ -8,21 +8,21 @@
 # DEVICE ....... The AVR device you compile for
 # CLOCK ........ Target AVR clock rate in Hertz
 # OBJECTS ...... The object files created from your source files. This list is
-#                usually the same as the list of source files with suffix ".o".
+#				 usually the same as the list of source files with suffix ".o".
 # PROGRAMMER ... Options to avrdude which define the hardware you use for
-#                uploading to the AVR and the interface where this hardware
-#                is connected. We recommend that you leave it undefined and
-#                add settings like this to your ~/.avrduderc file:
-#                   default_programmer = "stk500v2"
-#                   default_serial = "avrdoper"
+#				 uploading to the AVR and the interface where this hardware
+#				 is connected. We recommend that you leave it undefined and
+#				 add settings like this to your ~/.avrduderc file:
+#					default_programmer = "stk500v2"
+#					default_serial = "avrdoper"
 # FUSES ........ Parameters for avrdude to flash the fuses appropriately.
 
-DEVICE     = atmega32u4
-CLOCK      = 16000000
+DEVICE	   = atmega32u4
+CLOCK	   = 16000000
 PROGRAMMER = -c avr109 -P /dev/tty.usbmodem411
 #-c stk500v2 -P avrdoper
-OBJECTS    = main.o usb_serial.o
-FUSES      = #-U hfuse:w:0xd9:m -U lfuse:w:0x24:m
+OBJECTS	   = main.o usb_serial.o sx.o
+FUSES	   = #-U hfuse:w:0xd9:m -U lfuse:w:0x24:m
 #AVRDUDE_BIN = ./flash.py
 AVRDUDE_BIN = avrdude
 
@@ -30,20 +30,20 @@ AVRDUDE_BIN = avrdude
 # Example for 8 MHz internal oscillator
 # Fuse high byte:
 # 0xd9 = 1 1 0 1   1 0 0 1 <-- BOOTRST (boot reset vector at 0x0000)
-#        ^ ^ ^ ^   ^ ^ ^------ BOOTSZ0
-#        | | | |   | +-------- BOOTSZ1
-#        | | | |   +---------- EESAVE (set to 0 to preserve EEPROM over chip erase)
-#        | | | +-------------- CKOPT (clock option, depends on oscillator type)
-#        | | +---------------- SPIEN (if set to 1, serial programming is disabled)
-#        | +------------------ WDTON (if set to 0, watchdog is always on)
-#        +-------------------- RSTDISBL (if set to 0, RESET pin is disabled)
+#		 ^ ^ ^ ^   ^ ^ ^------ BOOTSZ0
+#		 | | | |   | +-------- BOOTSZ1
+#		 | | | |   +---------- EESAVE (set to 0 to preserve EEPROM over chip erase)
+#		 | | | +-------------- CKOPT (clock option, depends on oscillator type)
+#		 | | +---------------- SPIEN (if set to 1, serial programming is disabled)
+#		 | +------------------ WDTON (if set to 0, watchdog is always on)
+#		 +-------------------- RSTDISBL (if set to 0, RESET pin is disabled)
 # Fuse low byte:
 # 0x24 = 0 0 1 0   0 1 0 0
-#        ^ ^ \ /   \--+--/
-#        | |  |       +------- CKSEL 3..0 (8M internal RC)
-#        | |  +--------------- SUT 1..0 (slowly rising power)
-#        | +------------------ BODEN (if 0, brown-out detector is enabled)
-#        +-------------------- BODLEVEL (if 0: 4V, if 1: 2.7V)
+#		 ^ ^ \ /   \--+--/
+#		 | |  |		  +------- CKSEL 3..0 (8M internal RC)
+#		 | |  +--------------- SUT 1..0 (slowly rising power)
+#		 | +------------------ BODEN (if 0, brown-out detector is enabled)
+#		 +-------------------- BODLEVEL (if 0: 4V, if 1: 2.7V)
 #
 # For computing fuse byte values for other devices and options see
 # the fuse bit calculator at http://www.engbedded.com/fusecalc/
@@ -99,7 +99,7 @@ main.hex: main.elf
 # EEPROM and add it to the "flash" target.
 
 # Targets for code debugging and analysis:
-disasm:	main.elf
+disasm: main.elf
 	avr-objdump -d main.elf
 
 cpp:
