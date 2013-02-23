@@ -427,7 +427,7 @@ static uint8_t transmit_previous_timeout=0;
  * by the PC.  These are ignored, but kept in RAM.
  */
 static uint8_t cdc_line_coding[7]={0x00, 0xE1, 0x00, 0x00, 0x00, 0x00, 0x08};
-static uint8_t cdc_line_rtsdtr=0;
+volatile uint8_t sx_cdc_line_rtsdtr=0;
 
 
 /**************************************************************************
@@ -447,7 +447,7 @@ void usb_init(void)
 	USB_CONFIG();                       /* start USB clock */
 	UDCON = 0;                          /* enable attach resistor */
 	usb_configuration = 0;
-	cdc_line_rtsdtr = 0;
+	sx_cdc_line_rtsdtr = 0;
 	UDIEN = _BV(EORSTE)|_BV(SOFE);
 	sei();
 }
@@ -794,33 +794,6 @@ void usb_serial_flush_output(void)
 }
 
 /*
- * functions to read the various async serial settings.  These
- * aren't actually used by USB at all (communication is always
- * at full USB speed), but they are set by the host so we can
- * set them properly if we're converting the USB to a real serial
- * communication
- */
-uint32_t usb_serial_get_baud(void)
-{
-	return *(uint32_t *)cdc_line_coding;
-}
-uint8_t usb_serial_get_stopbits(void)
-{
-	return cdc_line_coding[4];
-}
-uint8_t usb_serial_get_paritytype(void)
-{
-	return cdc_line_coding[5];
-}
-uint8_t usb_serial_get_numbits(void)
-{
-	return cdc_line_coding[6];
-}
-uint8_t usb_serial_get_control(void)
-{
-	return cdc_line_rtsdtr;
-}
-/*
  * write the control signals, DCD, DSR, RI, etc
  * There is no CTS signal.  If software on the host has transmitted
  * data to you but you haven't been calling the getchar function,
@@ -890,7 +863,7 @@ ISR(USB_GEN_vect)
 		UECFG1X = EP_SIZE(ENDPOINT0_SIZE) | EP_SINGLE_BUFFER;
 		UEIENX = _BV(RXSTPE);
 		usb_configuration = 0;
-		cdc_line_rtsdtr = 0;
+		sx_cdc_line_rtsdtr = 0;
 	}
 	if (intbits & (1<<SOFI)) {
 		if (usb_configuration) {
@@ -1012,7 +985,7 @@ ISR(USB_COM_vect)
 		}
 		if (bRequest == SET_CONFIGURATION && bmRequestType == 0) {
 			usb_configuration = wValue;
-			cdc_line_rtsdtr = 0;
+			sx_cdc_line_rtsdtr = 0;
 			transmit_flush_timer = 0;
 			usb_send_in();
 			cfg = endpoint_config_table;
@@ -1055,7 +1028,7 @@ ISR(USB_COM_vect)
 			return;
 		}
 		if (bRequest == CDC_SET_CONTROL_LINE_STATE && bmRequestType == 0x21) {
-			cdc_line_rtsdtr = wValue;
+			sx_cdc_line_rtsdtr = wValue;
 			usb_wait_in_ready();
 			usb_send_in();
 			return;

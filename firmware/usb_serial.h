@@ -19,11 +19,8 @@ int8_t usb_serial_write(const uint8_t *buffer, uint16_t size); /* transmit a buf
 void usb_serial_flush_output(void);             /* immediately transmit any buffered output */
 
 /* serial parameters */
-uint32_t usb_serial_get_baud(void);             /* get the baud rate */
-uint8_t usb_serial_get_stopbits(void);          /* get the number of stop bits */
-uint8_t usb_serial_get_paritytype(void);        /* get the parity type */
-uint8_t usb_serial_get_numbits(void);           /* get the number of data bits */
-uint8_t usb_serial_get_control(void);           /* get the RTS and DTR signal state */
+extern volatile uint8_t sx_cdc_line_rtsdtr;
+#define usb_serial_get_control() sx_cdc_line_rtsdtr /* get the RTS and DTR signal state */
 int8_t usb_serial_set_control(uint8_t signals); /* set DSR, DCD, RI, etc */
 
 /* constants corresponding to the various serial parameters */
