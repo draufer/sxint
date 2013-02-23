@@ -4,14 +4,14 @@
  *  Created on: 23.02.2013
  *  Changed on: 23.02.2013
  *  Version:    0.1
- *  Copyright:  Jan Seifert, Frederic Endner-Duehr, Dirk Raufer
+ *  Copyright:  Jan Seiffert, Frederic Endner-Duehr, Dirk Raufer
  *
- * SX functionality derived from the original Arduino library of Michael Blank:
+ * SX functionality inspired from the original Arduino library of Michael Blank:
  *  http://www.oscale.net/selectrix
  *
- * USB functionality taken from PJRC.COM, LLC
- *  http://www.pjrc.com/teensy/
- *  The USB code was modifed by us for our specifi needs.
+ * USB code taken from PJRC.COM, LLC
+ *  http://www.pjrc.com/teensy/usb_serial.html
+ *  The USB code was modifed by us for our specific needs.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -27,6 +27,7 @@
  * License along with this library; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
+
 
 /*
     Obere Reihe von links nach rechts: Px1, Px2, Sx-T1(Daten von der Zentrale)
