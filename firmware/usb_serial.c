@@ -370,13 +370,13 @@ void usb_init(void)
 	HW_CONFIG();
 	USB_FREEZE();                       /* enable USB */
 	PLL_CONFIG();                       /* config PLL, 16 MHz xtal */
-	while (!(PLLCSR & (1<<PLOCK)))
+	while (!(PLLCSR & _BV(PLOCK)))
 		/* nop */;                       /* wait for PLL lock */
 	USB_CONFIG();                       /* start USB clock */
 	UDCON = 0;                          /* enable attach resistor */
 	usb_configuration = 0;
 	cdc_line_rtsdtr = 0;
-	UDIEN = (1<<EORSTE)|(1<<SOFE);
+	UDIEN = _BV(EORSTE)|_BV(SOFE);
 	sei();
 }
 
@@ -408,9 +408,9 @@ int16_t usb_serial_getchar(void)
 	UENUM = CDC_RX_ENDPOINT;
 retry:
 	c = UEINTX;
-	if (!(c & (1<<RWAL))) {
+	if (!(c & _BV(RWAL))) {
 		/* no data in buffer */
-		if (c & (1<<RXOUTI)) {
+		if (c & _BV(RXOUTI)) {
 			UEINTX = 0x6B;
 			goto retry;
 		}
@@ -420,7 +420,7 @@ retry:
 	/* take one byte out of the buffer */
 	c = UEDATX;
 	/* if buffer completely used, release it */
-	if (!(UEINTX & (1<<RWAL)))
+	if (!(UEINTX & _BV(RWAL)))
 		UEINTX = 0x6B;
 	SREG = intr_state;
 	return c;
@@ -438,7 +438,7 @@ uint8_t usb_serial_available(void)
 		n = UEBCLX;
 		if (!n) {
 			i = UEINTX;
-			if (i & (1<<RXOUTI) && !(i & (1<<RWAL)))
+			if (i & _BV(RXOUTI) && !(i & _BV(RWAL)))
 				UEINTX = 0x6B;
 		}
 	}
@@ -455,8 +455,8 @@ void usb_serial_flush_input(void)
 		intr_state = SREG;
 		cli();
 		UENUM = CDC_RX_ENDPOINT;
-		while ((UEINTX & (1<<RWAL))) {
-			UEINTX = 0x6B; 
+		while ((UEINTX & _BV(RWAL))) {
+			UEINTX = 0x6B;
 		}
 		SREG = intr_state;
 	}
@@ -480,7 +480,7 @@ int8_t usb_serial_putchar(uint8_t c)
 	UENUM = CDC_TX_ENDPOINT;
 	/* if we gave up due to timeout before, don't wait again */
 	if (transmit_previous_timeout) {
-		if (!(UEINTX & (1<<RWAL))) {
+		if (!(UEINTX & _BV(RWAL))) {
 			SREG = intr_state;
 			return -1;
 		}
@@ -490,7 +490,7 @@ int8_t usb_serial_putchar(uint8_t c)
 	timeout = UDFNUML + TRANSMIT_TIMEOUT;
 	while (1) {
 		// are we ready to transmit?
-		if (UEINTX & (1<<RWAL))
+		if (UEINTX & _BV(RWAL))
 			break;
 		SREG = intr_state;
 		/*
@@ -512,7 +512,7 @@ int8_t usb_serial_putchar(uint8_t c)
 	/* actually write the byte into the FIFO */
 	UEDATX = c;
 	/* if this completed a packet, transmit it now! */
-	if (!(UEINTX & (1<<RWAL)))
+	if (!(UEINTX & _BV(RWAL)))
 		UEINTX = 0x3A;
 	transmit_flush_timer = TRANSMIT_FLUSH_TIMEOUT;
 	SREG = intr_state;
@@ -533,7 +533,7 @@ int8_t usb_serial_putchar_nowait(uint8_t c)
 	intr_state = SREG;
 	cli();
 	UENUM = CDC_TX_ENDPOINT;
-	if (!(UEINTX & (1<<RWAL))) {
+	if (!(UEINTX & _BV(RWAL))) {
 		/* buffer is full */
 		SREG = intr_state;
 		return -1;
@@ -541,7 +541,7 @@ int8_t usb_serial_putchar_nowait(uint8_t c)
 	/* actually write the byte into the FIFO */
 	UEDATX = c;
 	/* if this completed a packet, transmit it now! */
-	if (!(UEINTX & (1<<RWAL)))
+	if (!(UEINTX & _BV(RWAL)))
 		UEINTX = 0x3A;
 	transmit_flush_timer = TRANSMIT_FLUSH_TIMEOUT;
 	SREG = intr_state;
@@ -578,7 +578,7 @@ int8_t usb_serial_write(const uint8_t *buffer, uint16_t size)
 	UENUM = CDC_TX_ENDPOINT;
 	/* if we gave up due to timeout before, don't wait again */
 	if (transmit_previous_timeout) {
-		if (!(UEINTX & (1<<RWAL))) {
+		if (!(UEINTX & _BV(RWAL))) {
 			SREG = intr_state;
 			return -1;
 		}
@@ -590,7 +590,7 @@ int8_t usb_serial_write(const uint8_t *buffer, uint16_t size)
 		timeout = UDFNUML + TRANSMIT_TIMEOUT;
 		while (1) {
 			/* are we ready to transmit? */
-			if (UEINTX & (1<<RWAL))
+			if (UEINTX & _BV(RWAL))
 				break;
 			SREG = intr_state;
 			/*
@@ -692,7 +692,7 @@ int8_t usb_serial_write(const uint8_t *buffer, uint16_t size)
 			case  0: break;
 		}
 		/* if this completed a packet, transmit it now! */
-		if (!(UEINTX & (1<<RWAL)))
+		if (!(UEINTX & _BV(RWAL)))
 			UEINTX = 0x3A;
 		transmit_flush_timer = TRANSMIT_FLUSH_TIMEOUT;
 		SREG = intr_state;
@@ -769,7 +769,7 @@ int8_t usb_serial_set_control(uint8_t signals)
 	}
 
 	UENUM = CDC_ACM_ENDPOINT;
-	if (!(UEINTX & (1<<RWAL))) {
+	if (!(UEINTX & _BV(RWAL))) {
 		/*
 		 * unable to write
 		 * TODO; should this try to abort the previously
@@ -811,12 +811,12 @@ ISR(USB_GEN_vect)
 
 	intbits = UDINT;
 	UDINT = 0;
-	if (intbits & (1<<EORSTI)) {
+	if (intbits & _BV(EORSTI)) {
 		UENUM = 0;
 		UECONX = 1;
 		UECFG0X = EP_TYPE_CONTROL;
 		UECFG1X = EP_SIZE(ENDPOINT0_SIZE) | EP_SINGLE_BUFFER;
-		UEIENX = (1<<RXSTPE);
+		UEIENX = _BV(RXSTPE);
 		usb_configuration = 0;
 		cdc_line_rtsdtr = 0;
 	}
@@ -838,19 +838,19 @@ ISR(USB_GEN_vect)
 /* Misc functions to wait for ready and send/receive packets */
 static inline void usb_wait_in_ready(void)
 {
-	while (!(UEINTX & (1<<TXINI))) ;
+	while (!(UEINTX & _BV(TXINI))) ;
 }
 static inline void usb_send_in(void)
 {
-	UEINTX = ~(1<<TXINI);
+	UEINTX = ~_BV(TXINI);
 }
 static inline void usb_wait_receive_out(void)
 {
-	while (!(UEINTX & (1<<RXOUTI))) ;
+	while (!(UEINTX & _BV(RXOUTI))) ;
 }
 static inline void usb_ack_out(void)
 {
-	UEINTX = ~(1<<RXOUTI);
+	UEINTX = ~_BV(RXOUTI);
 }
 
 
@@ -878,7 +878,7 @@ ISR(USB_COM_vect)
 
 	UENUM = 0;
 	intbits = UEINTX;
-	if (intbits & (1<<RXSTPI)) {
+	if (intbits & _BV(RXSTPI)) {
 		bmRequestType = UEDATX;
 		bRequest = UEDATX;
 		wValue = UEDATX;
@@ -887,12 +887,12 @@ ISR(USB_COM_vect)
 		wIndex |= (UEDATX << 8);
 		wLength = UEDATX;
 		wLength |= (UEDATX << 8);
-		UEINTX = ~((1<<RXSTPI) | (1<<RXOUTI) | (1<<TXINI));
+		UEINTX = ~(_BV(RXSTPI) | _BV(RXOUTI) | _BV(TXINI));
 		if (bRequest == GET_DESCRIPTOR) {
 			list = (const uint8_t *)descriptor_list;
 			for (i = 0; ; i++) {
 				if (i >= NUM_DESC_LIST) {
-					UECONX = (1<<STALLRQ)|(1<<EPEN);  /* stall */
+					UECONX = _BV(STALLRQ)|_BV(EPEN);  /* stall */
 					return;
 				}
 				desc_val = pgm_read_word(list);
@@ -919,8 +919,8 @@ ISR(USB_COM_vect)
 				/* wait for host ready for IN packet */
 				do {
 					i = UEINTX;
-				} while (!(i & ((1<<TXINI)|(1<<RXOUTI))));
-				if (i & (1<<RXOUTI))
+				} while (!(i & (_BV(TXINI)|_BV(RXOUTI))));
+				if (i & _BV(RXOUTI))
 					return;    /* abort */
 				/* send IN packet */
 				n = len < ENDPOINT0_SIZE ? len : ENDPOINT0_SIZE;
@@ -935,7 +935,7 @@ ISR(USB_COM_vect)
 		if (bRequest == SET_ADDRESS) {
 			usb_send_in();
 			usb_wait_in_ready();
-			UDADDR = wValue | (1<<ADDEN);
+			UDADDR = wValue | _BV(ADDEN);
 			return;
 		}
 		if (bRequest == SET_CONFIGURATION && bmRequestType == 0) {
@@ -994,7 +994,7 @@ ISR(USB_COM_vect)
 #ifdef SUPPORT_ENDPOINT_HALT
 			if (bmRequestType == 0x82) {
 				UENUM = wIndex;
-				if (UECONX & (1<<STALLRQ))
+				if (UECONX & _BV(STALLRQ))
 					i = 1;
 				UENUM = 0;
 			}
@@ -1012,10 +1012,10 @@ ISR(USB_COM_vect)
 				usb_send_in();
 				UENUM = i;
 				if (bRequest == SET_FEATURE) {
-					UECONX = (1<<STALLRQ)|(1<<EPEN);
+					UECONX = _BV(STALLRQ)|_BV(EPEN);
 				} else {
-					UECONX = (1<<STALLRQC)|(1<<RSTDT)|(1<<EPEN);
-					UERST = (1 << i);
+					UECONX = _BV(STALLRQC)|_BV(RSTDT)|_BV(EPEN);
+					UERST = 1 << i;
 					UERST = 0;
 				}
 				return;
@@ -1023,7 +1023,7 @@ ISR(USB_COM_vect)
 		}
 #endif
 	}
-	UECONX = (1<<STALLRQ) | (1<<EPEN);  /* stall */
+	UECONX = _BV(STALLRQ) | _BV(EPEN);  /* stall */
 }
 
 /* EOF */
