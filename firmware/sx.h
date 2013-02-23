@@ -54,9 +54,27 @@
 #define SX_FRAME_BYTES (((SX_FRAME_LEN * SX_BITCOUNT)/UINT8_T_BIT))
 #define SX_CHAN_MAX (SX_BASE_FRAME_CNT*SX_BASE_FRAME_INFO_CNT)
 
+/*
+ * ! ! ! Attention ! ! !
+ * the internal state is not really for consumption, put practical
+ * for debugging.
+ * Some real life use cases may show the path to a canned interface
+ * around it.
+ */
+enum sx_internal_state
+{
+	SX_SEARCH_SYNC,
+	SX_WAIT_FOR_FRAME_AFTER_SYNC_INIT,
+	SX_WAIT_FOR_FRAME_AFTER_SYNC,
+	SX_SEARCH_BASE_FRAME0,
+	SX_WAIT_FOR_FRAME_AFTER_BASE_FRAME0_INIT,
+	SX_WAIT_FOR_FRAME_AFTER_BASE_FRAME0,
+	SX_CONTROL_SYNC,
+} __attribute__((__packed__));
+
 void sx_init(void);
 uint8_t sx_get(uint8_t);
-uint8_t sx_get_state();
+enum sx_internal_state sx_get_state(void);
 void sx_tick(void);
 
 #endif /* SX_H_ */
