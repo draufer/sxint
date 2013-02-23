@@ -71,16 +71,6 @@ static struct {
 	uint8_t gen;
 } sx_frame_wait;
 /* internal state */
-enum sx_internal_state
-{
-	SX_SEARCH_SYNC,
-	SX_WAIT_FOR_FRAME_AFTER_SYNC_INIT,
-	SX_WAIT_FOR_FRAME_AFTER_SYNC,
-	SX_SEARCH_BASE_FRAME0,
-	SX_WAIT_FOR_FRAME_AFTER_BASE_FRAME0_INIT,
-	SX_WAIT_FOR_FRAME_AFTER_BASE_FRAME0,
-	SX_CONTROL_SYNC,
-} __attribute__((__packed__));
 static enum sx_internal_state internal_state;
 
 /**************************** init **********************/
@@ -139,7 +129,6 @@ void sx_init()
 	EICRA |= (1<<ISC00) | (1<<ISC01);
 	/* activate external interupt */
 	EIMSK |= (1<<INT0);
-
 }
 
 /*************************** functions ********************/
@@ -149,23 +138,25 @@ uint8_t sx_get(uint8_t channel)
 /* TODO: get data from raw buffer */
 	return sx_raw_bits_in[channel];
 }
-    
-uint8_t sx_get_state(){
-    return internal_state;
+
+enum sx_internal_state sx_get_state(void)
+{
+	return internal_state;
 }
 
 #if 0
-uint16_t sx_get_startbit(uint8_t channel) {
-    /*
-    Notes:
-    _channel = (15-_baseAdr) + ((6-_dataFrameCount)<<4);
-    
-    tFrame = channel / 16;
-    tBase = channel % 16;
-    Frame = 6 - tFrame;
-    Base = 15 - tBase;
-    bit_addr = Base * 8 * 12 + frame * 12;
-    */
+uint16_t sx_get_startbit(uint8_t channel)
+{
+/*
+Notes:
+	_channel = (15-_baseAdr) + ((6-_dataFrameCount)<<4);
+
+	tFrame = channel / 16;
+	tBase = channel % 16;
+	Frame = 6 - tFrame;
+	Base = 15 - tBase;
+	bit_addr = Base * 8 * 12 + frame * 12;
+*/
 }
 #endif
 
@@ -177,6 +168,7 @@ static noinline bool sx_wait_base_frame(void)
 	static uint16_t last_bit_num;
 	uint16_t local_bit_num = sx_nxt_bit_num, t;
 
+	/* this uses a benign race, to prevent switching interrupts off */
 	t = local_bit_num;
 	if(last_bit_num > local_bit_num)
 		local_bit_num += SX_FRAME_BIT;
@@ -203,6 +195,7 @@ static noinline bool sx_wait_frame(void)
 	uint8_t diff;
 	uint16_t bdiff;
 
+	/* this uses a benign race, to prevent switching interrupts off */
 	diff = sx_frame_gen_cnt - sx_frame_wait.gen;
 	if(0 == diff)
 		return false;
@@ -292,9 +285,9 @@ static noinline bool sx_search_base_frame0(void)
 		}
 	}
 	if(off >= SX_FRAME_BYTES) {
-        internal_state = SX_SEARCH_SYNC;
 		/* huh? something went wrong */
-		/* TODO: retry bit sync */
+		internal_state = SX_SEARCH_SYNC;
+		/* TODO: manipulating state from here is dirty */
 	}
 	return false;
 }
@@ -409,7 +402,7 @@ static __attribute__((__signal__, __used__)) void edge_rising(void)
 	local_bit_num++;
 	if(local_bit_num >= SX_FRAME_BIT) {
 		local_bit_num = 0; /* overflow */
-		sx_frame_gen_cnt++;
+		sx_frame_gen_cnt++; /* create new generation */
 	}
 	/* write bit number back */
 	sx_nxt_bit_num = local_bit_num;
