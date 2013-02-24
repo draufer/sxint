@@ -635,7 +635,7 @@ int8_t usb_serial_putchar_nowait(uint8_t c)
  */
 int8_t usb_serial_write(const uint8_t *buffer, uint16_t size)
 {
-	uint8_t timeout, intr_state, write_size;
+	uint8_t intr_state;
 
 	/* if we're not online (enumerated and configured), error */
 	if (!usb_configuration)
@@ -658,8 +658,10 @@ int8_t usb_serial_write(const uint8_t *buffer, uint16_t size)
 	}
 	/* each iteration of this loop transmits a packet */
 	while (size) {
+		uint8_t write_size;
+		{
 		/* wait for the FIFO to be ready to accept data */
-		timeout = UDFNUML + TRANSMIT_TIMEOUT;
+		uint8_t timeout = UDFNUML + TRANSMIT_TIMEOUT;
 		while (1) {
 			/* are we ready to transmit? */
 			if (UEINTX & _BV(RWAL))
@@ -681,88 +683,114 @@ int8_t usb_serial_write(const uint8_t *buffer, uint16_t size)
 			cli();
 			UENUM = CDC_TX_ENDPOINT;
 		}
+		}
 
 		/* compute how many bytes will fit into the next packet */
 		write_size = CDC_TX_SIZE - UEBCLX;
+#if (CDC_TX_SIZE > 64)
+		if (write_size > 64)
+			write_size = 64;
+#endif
 		if (write_size > size)
 			write_size = size;
 		size -= write_size;
 
+#ifdef MAD_ASM_SKILLZ
+		/*
+		 * unfortunatly the compiler is not to smart to unravel this switch
+		 *
+		 * 6c4:       0c 94 1c 08     jmp     0x1038  ; 0x1038 <__tablejump2__>
+		 * 6c8:       f8 01           movw    r30, r16
+		 * 6ca:       81 91           ld      r24, Z+
+		 * 6cc:       8f 01           movw    r16, r30
+		 * 6ce:       80 93 f1 00     sts     0x00F1, r24
+		 * 6d2:       f8 01           movw    r30, r16
+		 * 6d4:       81 91           ld      r24, Z+
+		 * 6d6:       8f 01           movw    r16, r30
+		 * ......
+		 *
+		 * 1) the worst part is, he desparatly tries to move the buffer
+		 *    pointer around and around and around, for every byte,
+		 *    only to not store it in Z, two extra instruction per byte...
+		 * 2) besides that and the wasted flash, he hardcodes the
+		 *    UEDATX location into instructions again and again.
+		 *    What's nice on a once off access, is bad on repeated
+		 *    access, wasting more flash. Most compiler suck at the
+		 *    decision when better to materialize a constant in a reg
+		 *    and when to sink it into the instruction
+		 * 3) and to make matters worse he uses the __tablejump2__ helper,
+		 *    which never heard of ijmp (instead 2*push (2* 3 clock) +
+		 *    ret (5 clock) + other)
+		 * 4) and to round it of he uses a jumptable (more flash) with
+		 *    program memory access (slow). Yeah, only few compiler can do
+		 *    calculated jumps.
+		 *
+		 * so fix this by manual intervention, not pretty, but since this
+		 * is to copy many bytes, give it the love it deserves.
+		 */
+		uint16_t t;
+		asm volatile (
+			"subi %A[temp], pm_lo8(-(1f))\n\t"
+			"sbci %B[temp], pm_hi8(-(1f))\n\t"
+			"ijmp\n\t"
+			"1:\n\t"
+# define cpy_one() "ld %A[temp], %a[buffer]+\n\tst %a[uedatx], %A[temp]\n\t"
+# define cpy_two() cpy_one() cpy_one()
+# define cpy_four() cpy_two() cpy_two()
+# define cpy_eight() cpy_four() cpy_four()
+# if (CDC_TX_SIZE == 64)
+			cpy_eight()
+			cpy_eight()
+			cpy_eight()
+			cpy_eight()
+# endif
+# if (CDC_TX_SIZE >= 32)
+			cpy_eight()
+			cpy_eight()
+# endif
+# if (CDC_TX_SIZE >= 16)
+			cpy_eight()
+# endif
+			cpy_eight()
+			/*  0 */
+			: /* %0 */ [buffer] "=e" (buffer),
+			  /* %1 */ [temp]   "=z" (t)
+			: /* %2 */ [uedatx] "e" (&UEDATX),
+			  /*    */ "0" (buffer),
+			  /*    */ "1" ((CDC_TX_SIZE - write_size)*2)
+		);
+# undef cpy_eight
+# undef cpy_four
+# undef cpy_two
+# undef cpy_one
+#else
+# define cpy_one(x) case x: UEDATX = *buffer++;
+# define cpy_two(x) cpy_one(x) cpy_one(x+1)
+# define cpy_four(x) cpy_two(x) cpy_two(x+2)
+# define cpy_eight(x) cpy_four(x) cpy_four(x+4)
 		/* write the packet */
 		switch (write_size) {
-#if (CDC_TX_SIZE == 64)
-			case 64: UEDATX = *buffer++;
-			case 63: UEDATX = *buffer++;
-			case 62: UEDATX = *buffer++;
-			case 61: UEDATX = *buffer++;
-			case 60: UEDATX = *buffer++;
-			case 59: UEDATX = *buffer++;
-			case 58: UEDATX = *buffer++;
-			case 57: UEDATX = *buffer++;
-			case 56: UEDATX = *buffer++;
-			case 55: UEDATX = *buffer++;
-			case 54: UEDATX = *buffer++;
-			case 53: UEDATX = *buffer++;
-			case 52: UEDATX = *buffer++;
-			case 51: UEDATX = *buffer++;
-			case 50: UEDATX = *buffer++;
-			case 49: UEDATX = *buffer++;
-			case 48: UEDATX = *buffer++;
-			case 47: UEDATX = *buffer++;
-			case 46: UEDATX = *buffer++;
-			case 45: UEDATX = *buffer++;
-			case 44: UEDATX = *buffer++;
-			case 43: UEDATX = *buffer++;
-			case 42: UEDATX = *buffer++;
-			case 41: UEDATX = *buffer++;
-			case 40: UEDATX = *buffer++;
-			case 39: UEDATX = *buffer++;
-			case 38: UEDATX = *buffer++;
-			case 37: UEDATX = *buffer++;
-			case 36: UEDATX = *buffer++;
-			case 35: UEDATX = *buffer++;
-			case 34: UEDATX = *buffer++;
-			case 33: UEDATX = *buffer++;
-#endif
-#if (CDC_TX_SIZE >= 32)
-			case 32: UEDATX = *buffer++;
-			case 31: UEDATX = *buffer++;
-			case 30: UEDATX = *buffer++;
-			case 29: UEDATX = *buffer++;
-			case 28: UEDATX = *buffer++;
-			case 27: UEDATX = *buffer++;
-			case 26: UEDATX = *buffer++;
-			case 25: UEDATX = *buffer++;
-			case 24: UEDATX = *buffer++;
-			case 23: UEDATX = *buffer++;
-			case 22: UEDATX = *buffer++;
-			case 21: UEDATX = *buffer++;
-			case 20: UEDATX = *buffer++;
-			case 19: UEDATX = *buffer++;
-			case 18: UEDATX = *buffer++;
-			case 17: UEDATX = *buffer++;
-#endif
-#if (CDC_TX_SIZE >= 16)
-			case 16: UEDATX = *buffer++;
-			case 15: UEDATX = *buffer++;
-			case 14: UEDATX = *buffer++;
-			case 13: UEDATX = *buffer++;
-			case 12: UEDATX = *buffer++;
-			case 11: UEDATX = *buffer++;
-			case 10: UEDATX = *buffer++;
-			case  9: UEDATX = *buffer++;
-#endif
-			case  8: UEDATX = *buffer++;
-			case  7: UEDATX = *buffer++;
-			case  6: UEDATX = *buffer++;
-			case  5: UEDATX = *buffer++;
-			case  4: UEDATX = *buffer++;
-			case  3: UEDATX = *buffer++;
-			case  2: UEDATX = *buffer++;
-			default:
-			case  1: UEDATX = *buffer++;
+# if (CDC_TX_SIZE == 64)
+			cpy_eight(57)
+			cpy_eight(49)
+			cpy_eight(41)
+			cpy_eight(33)
+# endif
+# if (CDC_TX_SIZE >= 32)
+			cpy_eight(25)
+			cpy_eight(17)
+# endif
+# if (CDC_TX_SIZE >= 16)
+			cpy_eight(9)
+# endif
+			cpy_eight(1)
 			case  0: break;
 		}
+# undef cpy_eight
+# undef cpy_four
+# undef cpy_two
+# undef cpy_one
+#endif
 		/* if this completed a packet, transmit it now! */
 		if (!(UEINTX & _BV(RWAL)))
 			UEINTX = 0x3A;
