@@ -41,7 +41,6 @@
 #define LED_OFF     (PORTD &= ~(1<<6))
 #define CPU_PRESCALE(n) (CLKPR = 0x80, CLKPR = (n))
 
-void send_str(const char *s);
 uint8_t recv_str(char *buf, uint8_t size);
 void parse_and_execute_command(const char *buf, uint8_t num);
 
@@ -108,7 +107,7 @@ int main(void)
 		usb_serial_flush_input();
 
 		// print a nice welcome message
-		send_str(PSTR("\r\nTeensy USB Serial Example, "
+		usb_serial_write_str_PGM(PSTR("\r\nTeensy USB Serial Example, "
 					"Simple Pin Control Shell\r\n\r\n"
 					"Example Commands\r\n"
 					"  B0?   Read Port B, pin 0\r\n"
@@ -117,28 +116,15 @@ int main(void)
 
 		// and then listen for commands and process them
 		while (1) {
-			send_str(PSTR("> "));
+			usb_serial_write_str_PGM(PSTR("> "));
 			n = recv_str(buf, sizeof(buf));
 			if (n == 255) break;
-			send_str(PSTR("\r\n"));
+			usb_serial_write_str_PGM(PSTR("\r\n"));
 			parse_and_execute_command(buf, n);
 		}
 	}
 }
 #endif
-
-// Send a string to the USB serial port.  The string must be in
-// flash memory, using PSTR
-//
-void send_str(const char *s)
-{
-	char c;
-	while (1) {
-		c = pgm_read_byte(s++);
-		if (!c) break;
-		usb_serial_putchar(c);
-	}
-}
 
 // Receive a string from the USB serial port.  The string is stored
 // in the buffer and this function will not exceed the buffer size.
@@ -180,7 +166,7 @@ void parse_and_execute_command(const char *buf, uint8_t num)
 	uint8_t port, pin, val;
 
 	if (num < 3) {
-		send_str(PSTR("unrecognized format, 3 chars min req'd\r\n"));
+		usb_serial_write_str_PGM(PSTR("unrecognized format, 3 chars min req'd\r\n"));
 		return;
 	}
 	// first character is the port letter
@@ -189,18 +175,18 @@ void parse_and_execute_command(const char *buf, uint8_t num)
 	} else if (buf[0] >= 'a' && buf[0] <= 'f') {
 		port = buf[0] - 'a';
 	} else {
-		send_str(PSTR("Unknown port \""));
+		usb_serial_write_str_PGM(PSTR("Unknown port \""));
 		usb_serial_putchar(buf[0]);
-		send_str(PSTR("\", must be A - F\r\n"));
+		usb_serial_write_str_PGM(PSTR("\", must be A - F\r\n"));
 		return;
 	}
 	// second character is the pin number
 	if (buf[1] >= '0' && buf[1] <= '7') {
 		pin = buf[1] - '0';
 	} else {
-		send_str(PSTR("Unknown pin \""));
+		usb_serial_write_str_PGM(PSTR("Unknown pin \""));
 		usb_serial_putchar(buf[0]);
-		send_str(PSTR("\", must be 0 to 7\r\n"));
+		usb_serial_write_str_PGM(PSTR("\", must be 0 to 7\r\n"));
 		return;
 	}
 	// if the third character is a question mark, read the pin
@@ -210,7 +196,7 @@ void parse_and_execute_command(const char *buf, uint8_t num)
 		// read the pin
 		val = *(uint8_t *)(0x20 + port * 3) & (1 << pin);
 		usb_serial_putchar(val ? '1' : '0');
-		send_str(PSTR("\r\n"));
+		usb_serial_write_str_PGM(PSTR("\r\n"));
 		return;
 	}
 	// if the third character is an equals sign, write the pin
@@ -228,16 +214,16 @@ void parse_and_execute_command(const char *buf, uint8_t num)
 			*(uint8_t *)(0x22 + port * 3) |= (1 << pin);
 			return;
 		} else {
-			send_str(PSTR("Unknown value \""));
+			usb_serial_write_str_PGM(PSTR("Unknown value \""));
 			usb_serial_putchar(buf[3]);
-			send_str(PSTR("\", must be 0 or 1\r\n"));
+			usb_serial_write_str_PGM(PSTR("\", must be 0 or 1\r\n"));
 			return;
 		}
 	}
 	// otherwise, error message
-	send_str(PSTR("Unknown command \""));
+	usb_serial_write_str_PGM(PSTR("Unknown command \""));
 	usb_serial_putchar(buf[0]);
-	send_str(PSTR("\", must be ? or =\r\n"));
+	usb_serial_write_str_PGM(PSTR("\", must be ? or =\r\n"));
 }
 
 
