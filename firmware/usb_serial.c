@@ -800,6 +800,141 @@ int8_t usb_serial_write(const uint8_t *buffer, uint16_t size)
 	return 0;
 }
 
+int8_t usb_serial_write_str(const char *str)
+{
+	uint8_t intr_state;
+
+	/* if we're not online (enumerated and configured), error */
+	if (!usb_configuration)
+		return -1;
+	/*
+	 * interrupts are disabled so these functions can be
+	 * used from the main program or interrupt context,
+	 * even both in the same program!
+	 */
+	intr_state = SREG;
+	cli();
+	UENUM = CDC_TX_ENDPOINT;
+	/* if we gave up due to timeout before, don't wait again */
+	if (transmit_previous_timeout) {
+		if (!(UEINTX & _BV(RWAL))) {
+			SREG = intr_state;
+			return -1;
+		}
+		transmit_previous_timeout = 0;
+	}
+	/* each iteration of this loop transmits a packet */
+	while (*str) {
+		uint8_t write_size;
+		char c;
+		{
+		/* wait for the FIFO to be ready to accept data */
+		uint8_t timeout = UDFNUML + TRANSMIT_TIMEOUT;
+		while (1) {
+			/* are we ready to transmit? */
+			if (UEINTX & _BV(RWAL))
+				break;
+			SREG = intr_state;
+			/*
+			 * have we waited too long?  This happens if the user
+			 * is not running an application that is listening
+			 */
+			if (UDFNUML == timeout) {
+				transmit_previous_timeout = 1;
+				return -1;
+			}
+			/* has the USB gone offline? */
+			if (!usb_configuration)
+				return -1;
+			/* get ready to try checking again */
+			intr_state = SREG;
+			cli();
+			UENUM = CDC_TX_ENDPOINT;
+		}
+		}
+
+		/* compute how many bytes will fit into the next packet */
+		write_size = CDC_TX_SIZE - UEBCLX;
+
+		/* write the packet */
+		for (c = *str++; c && write_size; c = *str++, write_size--)
+			UEDATX = c;
+		/* if this completed a packet, transmit it now! */
+		if (!(UEINTX & _BV(RWAL)))
+			UEINTX = 0x3A;
+		transmit_flush_timer = TRANSMIT_FLUSH_TIMEOUT;
+		SREG = intr_state;
+	}
+	return 0;
+}
+
+int8_t usb_serial_write_str_PGM(PGM_P str)
+{
+	uint8_t intr_state;
+
+	/* if we're not online (enumerated and configured), error */
+	if (!usb_configuration)
+		return -1;
+	/*
+	 * interrupts are disabled so these functions can be
+	 * used from the main program or interrupt context,
+	 * even both in the same program!
+	 */
+	intr_state = SREG;
+	cli();
+	UENUM = CDC_TX_ENDPOINT;
+	/* if we gave up due to timeout before, don't wait again */
+	if (transmit_previous_timeout) {
+		if (!(UEINTX & _BV(RWAL))) {
+			SREG = intr_state;
+			return -1;
+		}
+		transmit_previous_timeout = 0;
+	}
+	/* each iteration of this loop transmits a packet */
+	while (pgm_read_byte(str)) {
+		uint8_t write_size;
+		char c;
+		{
+		/* wait for the FIFO to be ready to accept data */
+		uint8_t timeout = UDFNUML + TRANSMIT_TIMEOUT;
+		while (1) {
+			/* are we ready to transmit? */
+			if (UEINTX & _BV(RWAL))
+				break;
+			SREG = intr_state;
+			/*
+			 * have we waited too long?  This happens if the user
+			 * is not running an application that is listening
+			 */
+			if (UDFNUML == timeout) {
+				transmit_previous_timeout = 1;
+				return -1;
+			}
+			/* has the USB gone offline? */
+			if (!usb_configuration)
+				return -1;
+			/* get ready to try checking again */
+			intr_state = SREG;
+			cli();
+			UENUM = CDC_TX_ENDPOINT;
+		}
+		}
+
+		/* compute how many bytes will fit into the next packet */
+		write_size = CDC_TX_SIZE - UEBCLX;
+
+		/* write the packet */
+		for (c = pgm_read_byte(str++); c && write_size; c = pgm_read_byte(str++), write_size--)
+			UEDATX = c;
+		/* if this completed a packet, transmit it now! */
+		if (!(UEINTX & _BV(RWAL)))
+			UEINTX = 0x3A;
+		transmit_flush_timer = TRANSMIT_FLUSH_TIMEOUT;
+		SREG = intr_state;
+	}
+	return 0;
+}
 
 /*
  * immediately transmit any buffered output.

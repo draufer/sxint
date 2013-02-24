@@ -2,6 +2,7 @@
 #define usb_serial_h__
 
 #include <stdint.h>
+#include <avr/pgmspace.h>
 
 /* setup */
 void usb_init(void);                            /* initialize everything */
@@ -16,6 +17,8 @@ void usb_serial_flush_input(void);              /* discard any buffered input */
 int8_t usb_serial_putchar(uint8_t c);           /* transmit a character */
 int8_t usb_serial_putchar_nowait(uint8_t c);    /* transmit a character, do not wait */
 int8_t usb_serial_write(const uint8_t *buffer, uint16_t size); /* transmit a buffer */
+int8_t usb_serial_write_str(const char *str);   /* transmit a NUL terminated string */
+int8_t usb_serial_write_str_PGM(PGM_P str);     /* transmit a NUL terminated string from program memory */
 void usb_serial_flush_output(void);             /* immediately transmit any buffered output */
 
 /* serial parameters */
