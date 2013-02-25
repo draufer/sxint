@@ -201,7 +201,7 @@ uint8_t sx_get_channel(uint8_t channel)
         if (i != 2 && i != 5 && i != 8 && i != 11)
         {
             // copy one bit to channelbyte at a time
-            channelbyte |= (1<<i) & (sx_raw_bits_in[workbyte_pos]>>(bit_offset % 8));
+            channelbyte |= (1<<bit_transferred) & (sx_raw_bits_in[workbyte_pos]>>(bit_offset % 8));
             bit_transferred++;
         } 
     }
