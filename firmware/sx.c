@@ -144,19 +144,29 @@ enum sx_internal_state sx_get_state(void)
 	return internal_state;
 }
 
-#if 0
+#if 1
 uint16_t sx_get_startbit(uint8_t channel)
 {
-/*
-Notes:
-	_channel = (15-_baseAdr) + ((6-_dataFrameCount)<<4);
+    /* naming:
+       Number of base frames: SX_BASE_FRAME_CNT (16)
+       Number of info channels per base frame: SX_BASE_FRAME_INFO_CNT (7)
+    
+	   formula in arduino code: _channel = (15-_baseAdr) + ((6-_dataFrameCount)<<4);
+       example bitpos lok01: 1428
 
-	tFrame = channel / 16;
-	tBase = channel % 16;
-	Frame = 6 - tFrame;
-	Base = 15 - tBase;
-	bit_addr = Base * 8 * 12 + frame * 12;
-*/
+       computation:
+       
+       channel  = 1 (lok01)                   1
+	   tFrame   = channel / 16;               0
+	   tBase    = channel % 16;               1
+	   Frame    = 7 - tFrame;                 7
+	   Base     = 15 - tBase;                 14
+	   bit_addr = Base * 8 * 12 + frame * 12; 1428
+    */
+
+    return ((SX_BASE_FRAME_CNT - 1) - (channel % SX_BASE_FRAME_CNT)) * 8 * 12
+        + SX_BASE_FRAME_INFO_CNT - (channel / SX_BASE_FRAME_CNT) * 12;
+    
 }
 #endif
 

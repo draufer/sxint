@@ -2,7 +2,7 @@
  * http://www.pjrc.com/teensy/usb_serial.html
  * Copyright (c) 2008,2010,2011 PJRC.COM, LLC
  *
- * This is NOT the origignal version of the original code.
+ * This is NOT the original version of the code.
  * If you are interrested in it, visit the above mentioned web site.
  *
  * Copyright (c) 2013 Jan Seiffert, Frederic Endner-Duehr, Dirk Raufer
