@@ -168,6 +168,45 @@ uint16_t sx_get_startbit(uint8_t channel)
         + SX_BASE_FRAME_INFO_CNT - (channel / SX_BASE_FRAME_CNT) * 12;
     
 }
+
+uint8_t sx_get_channel(uint8_t channel)
+{
+    /*
+        TODO: The variables need to be cleaned
+    */
+        
+    uint8_t channelbyte = 0;            // The channel information result (8 bit payload)
+    uint16_t bitpos = sx_get_startbit(channel); // the postion of the first bit in the buffer
+    uint8_t bit_offset = bitpos % 8;    // the offset from the beginning of the first byte it is stored in
+    //uint8_t bytes_needed = 2;         // bytes we need to read to get the 12 bits
+    uint8_t start_byte = bitpos / 8;    // the first byte that contains the payload
+    uint8_t bit_transferred = 0;        // how many bits have i transferred? (0-8)
+    
+    uint8_t workbyte_pos = 0;           // the byte i read from now.
+    uint8_t i;
+    
+    //if (bit_offset > 4)
+    //    bytes_needed = 3;
+    
+    for (i = 0; i < 12; i++)
+    {
+        /*
+            Get the appropriate byte, expect wrap around.
+        */
+        workbyte_pos = (start_byte + (bit_offset + i) /8) % (SX_FRAME_BYTES*SX_BASE_FRAME_CNT);
+        
+        /*
+            Ignore selectrix format specific division bits
+        */  
+        if (i != 2 && i != 5 && i != 8 && i != 11)
+        {
+            // copy one bit to channelbyte at a time
+            channelbyte |= (1<<i) & (sx_raw_bits_in[workbyte_pos]>>(bit_offset % 8));
+            bit_transferred++;
+        } 
+    }
+    return channelbyte;
+}
 #endif
 
 /******************** helper ****************************/
