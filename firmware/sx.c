@@ -181,6 +181,7 @@ uint8_t sx_get_channel(uint8_t channel)
     //uint8_t bytes_needed = 2;         // bytes we need to read to get the 12 bits
     uint8_t start_byte = bitpos / 8;    // the first byte that contains the payload
     uint8_t bit_transferred = 0;        // how many bits have i transferred? (0-8)
+    uint32_t bytebuffer = 0;
     
     uint8_t workbyte_pos = 0;           // the byte i read from now.
     uint8_t i;
@@ -188,12 +189,18 @@ uint8_t sx_get_channel(uint8_t channel)
     //if (bit_offset > 4)
     //    bytes_needed = 3;
     
+    for (i = 0; i < 3; i++)
+    {
+        workbyte_pos = (start_byte + (bit_offset + i) /8) % (SX_FRAME_BYTES*SX_BASE_FRAME_CNT);
+        bytebuffer |= ((uint32_t)sx_raw_bits_in[workbyte_pos]<<(i * 8));
+    }
+    
     for (i = 0; i < 12; i++)
     {
         /*
             Get the appropriate byte, expect wrap around.
         */
-        workbyte_pos = (start_byte + (bit_offset + i) /8) % (SX_FRAME_BYTES*SX_BASE_FRAME_CNT);
+        //workbyte_pos = (start_byte + (bit_offset + i) /8) % (SX_FRAME_BYTES*SX_BASE_FRAME_CNT);
         
         /*
             Ignore selectrix format specific division bits
@@ -201,9 +208,12 @@ uint8_t sx_get_channel(uint8_t channel)
         if (i != 2 && i != 5 && i != 8 && i != 11)
         {
             // copy one bit to channelbyte at a time
-            channelbyte |= (1<<bit_transferred) & (sx_raw_bits_in[workbyte_pos]>>(bit_offset % 8));
+            channelbyte |= (1<<bit_transferred) & (bytebuffer<<bit_offset);
             bit_transferred++;
-        } 
+        } else
+        {
+            bytebuffer = (bytebuffer>>1);
+        }
     }
     return channelbyte;
 }

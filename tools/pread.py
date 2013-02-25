@@ -25,7 +25,7 @@ ser = serial.Serial('/dev/tty.usbmodem12341',9600)
 buf = ''
 sx = [0] * (8*16+10000)
 
-printbytes = 4
+printbytes = 2
 while True:
 	buf += ser.read(1)
 	if buf[-1] == '\n' and len(buf) >= printbytes:
