@@ -59,16 +59,11 @@ int main(void)
 		sx_tick();
         
 		//PORTC |= (1<<PC7);
-        //if (sx_nxt_bit_num == 1000) {
-		    //int n = usb_serial_getchar();
         if (counter > 50000) {
             usb_serial_putchar(sx_get_state());
 		    usb_serial_putchar(sx_get_channel(1));
-            //usb_serial_putchar(sx_get(179));
-            //usb_serial_putchar(sx_get(180));
             usb_serial_putchar('\n');
             counter = 0;
-            //}
         }
         counter++;
 	}
