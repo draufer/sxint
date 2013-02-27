@@ -223,10 +223,16 @@ void sx_set_channel(uint8_t channel, uint8_t data)
     for (i = 0; i < 3; i++)
     {
         // All bits we need to write are initialized with ones.
-        sx_raw_bits_out_data[start_byte + i] |= ((uint8_t)(bytemask>>(i * 8)));
+        sx_raw_bits_out_data[(start_byte + i) % (SX_FRAME_BYTES*SX_BASE_FRAME_CNT)]
+            |= ((uint8_t)(bytemask>>(i * 8)));
         
         // We set the bits that need to be zero to zero (before all relevant bits were turned to one).
-        sx_raw_bits_out_data[start_byte + i] &= ((uint8_t)(bytebuffer>>(i * 8)));
+        sx_raw_bits_out_data[(start_byte + i) % (SX_FRAME_BYTES*SX_BASE_FRAME_CNT)]
+            &= ((uint8_t)(bytebuffer>>(i * 8)));
+        
+        // Show the interrupt, that we want to write
+        sx_raw_bits_out_dir[(start_byte + i) % (SX_FRAME_BYTES*SX_BASE_FRAME_CNT)]
+            |= ((uint8_t)(bytemask>>(i * 8)));
     } 
 }
 
