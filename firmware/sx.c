@@ -458,7 +458,7 @@ static __attribute__((__signal__, __used__)) void edge_rising(void)
 	else
 		sx_raw_bits_in[byte_num] &= ~bit_mask;
 
-#if 0
+#if 1
 	/* get direction */
 	act_bit = !!(sx_raw_bits_out_dir[byte_num] & bit_mask);
 	if(act_bit)

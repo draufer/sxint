@@ -48,6 +48,8 @@ void parse_and_execute_command(const char *buf, uint8_t num);
 // SX Base Function (Read) Implementation Test
 int main(void)
 {
+    char buf[32];
+    uint8_t n;
     uint16_t counter = 0;
     cli();
     DDRC |= (1<<PC7);
@@ -57,9 +59,32 @@ int main(void)
     sei();
     while (1) {
         sx_tick();
-        //n = recv_str(buf, sizeof(buf));
+        n = recv_str(buf, sizeof(buf));
+        if (n != 255)
+        {
+            //usb_serial_putchar(sx_get_channel(buf[0]));
+            //usb_serial_putchar('\n');
+            /*
+            Command syntax:
+            =xy     set channel x to y
+            ?x      query channel x
+            */
+
+            if (buf[0] == '=' && n == 3)
+            {
+                sx_set_channel(buf[1] - 48, buf[2]);
+            }
+            if (buf[0] == '?' && n == 2)
+            {
+                //usb_serial_putchar(sx_get_state());
+                usb_serial_putchar(buf[1] - 48);
+                usb_serial_putchar(sx_get_channel(buf[1] - 48));
+                usb_serial_putchar('\n');
+            }
+        }
         
         //PORTC |= (1<<PC7);
+        /*
         if (counter > 50000) {
             usb_serial_putchar(sx_get_state());
             usb_serial_putchar(sx_get_channel(1));
@@ -67,6 +92,7 @@ int main(void)
             counter = 0;
         }
         counter++;
+        */
     }
 
 }
@@ -140,17 +166,23 @@ uint8_t recv_str(char *buf, uint8_t size)
             if (r == '\r' || r == '\n') return count;
             if (r >= ' ' && r <= '~') {
                 *buf++ = r;
-                usb_serial_putchar(r);
+                //usb_serial_putchar(r);
                 count++;
             }
         } else {
+            return 255;
+        }    
+        /*
+        } else {
             if (!usb_configured() ||
-                    !(usb_serial_get_control() & USB_SERIAL_DTR)) {
+                    !(usb_serial_get_control() & USB_SERIAL_DTR)
+            ) {
                 // user no longer connected
                 return 255;
             }
             // just a normal timeout, keep waiting
         }
+        */
     }
     return count;
 }
