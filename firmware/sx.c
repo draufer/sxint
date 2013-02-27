@@ -482,6 +482,12 @@ static __attribute__((__signal__, __used__)) void edge_rising(void)
 	}
 	/* write bit number back */
 	sx_nxt_bit_num = local_bit_num;
+    
+    /*
+        TODO: Unset the bit that was just written in sx_raw_bits_dir
+        to not send them again in the next cycle. This should be done
+        at the end of the interrupt to not delay the pullup further.
+    */
 }
 
 /*
