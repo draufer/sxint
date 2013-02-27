@@ -133,18 +133,11 @@ void sx_init()
 
 /*************************** functions ********************/
 
-uint8_t sx_get(uint8_t channel)
-{
-/* TODO: get data from raw buffer */
-	return sx_raw_bits_in[channel];
-}
-
 enum sx_internal_state sx_get_state(void)
 {
 	return internal_state;
 }
 
-#if 1
 uint16_t sx_get_startbit(uint8_t channel)
 {
     /* naming:
@@ -196,7 +189,46 @@ uint8_t sx_get_channel(uint8_t channel)
     return channelbyte;
 
 }
-#endif
+
+void sx_set_channel(uint8_t channel, uint8_t data)
+{
+    uint16_t bitpos = sx_get_startbit(channel); // the postion of the first bit in the buffer
+    uint8_t bit_offset = bitpos % 8;    // the offset from the beginning of the first byte it is stored in
+    uint8_t start_byte = bitpos / 8;    // the first byte that contains the payload
+    uint32_t bytebuffer = 0xffffffff;
+    uint32_t bytemask = 0;
+    uint8_t i;
+    
+    // The bit positions we want to write are turned to 1
+    bytemask = (((uint32_t)0x3ff)<<bit_offset);
+    
+    uint16_t databuffer = (uint16_t)data;
+    
+    // bytebuffer_tmp is initialized with ones
+    uint16_t bytebuffer_tmp = 0xffff;
+    
+    // the bits that are zeros in data/databuffer are set zero in bytebuffer_tmp, too.
+    bytebuffer_tmp &= ~((~databuffer & (0x3 << 0)) >> 0);
+    bytebuffer_tmp &= ~((~databuffer & (0x3 << 3)) >> 1);
+    bytebuffer_tmp &= ~((~databuffer & (0x3 << 6)) >> 2);
+    bytebuffer_tmp &= ~((~databuffer & (0x3 << 9)) >> 3);
+    
+    // bytebuffer_tmp is copied to bytebuffer (including the offset).
+    bytebuffer &= (((uint32_t)bytebuffer_tmp)<<bit_offset);
+    
+    // the offset bits are set to ones.
+    bytebuffer |= ((uint32_t)0xff>>(8 - bit_offset));
+
+    // the bits are transferred in the data array
+    for (i = 0; i < 3; i++)
+    {
+        // All bits we need to write are initialized with ones.
+        sx_raw_bits_in[start_byte + i] |= ((uint8_t)(bytemask>>(i * 8)));
+        
+        // We set the bits that need to be zero to zero (before all relevant bits were turned to one).
+        sx_raw_bits_in[start_byte + i] &= ((uint8_t)(bytebuffer>>(i * 8)));
+    } 
+}
 
 /******************** helper ****************************/
 

@@ -72,9 +72,10 @@ enum sx_internal_state
 	SX_CONTROL_SYNC,
 } __attribute__((__packed__));
 
-void sx_init(void);
-uint8_t sx_get(uint8_t);
-enum sx_internal_state sx_get_state(void);
-void sx_tick(void);
+void    sx_init(void);
+uint8_t sx_get_channel(uint8_t);
+void    sx_set_channel(uint8_t, uint8_t);
+enum    sx_internal_state sx_get_state(void);
+void    sx_tick(void);
 
 #endif /* SX_H_ */
