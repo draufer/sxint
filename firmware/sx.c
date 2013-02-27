@@ -208,10 +208,10 @@ void sx_set_channel(uint8_t channel, uint8_t data)
     uint16_t bytebuffer_tmp = 0xffff;
     
     // the bits that are zeros in data/databuffer are set zero in bytebuffer_tmp, too.
-    bytebuffer_tmp &= ~((~databuffer & (0x3 << 0)) >> 0);
-    bytebuffer_tmp &= ~((~databuffer & (0x3 << 3)) >> 1);
-    bytebuffer_tmp &= ~((~databuffer & (0x3 << 6)) >> 2);
-    bytebuffer_tmp &= ~((~databuffer & (0x3 << 9)) >> 3);
+    bytebuffer_tmp &= ~((~databuffer & (0x3 << 0)) << 0);
+    bytebuffer_tmp &= ~((~databuffer & (0x3 << 2)) << 1);
+    bytebuffer_tmp &= ~((~databuffer & (0x3 << 4)) << 2);
+    bytebuffer_tmp &= ~((~databuffer & (0x3 << 6)) << 3);
     
     // bytebuffer_tmp is copied to bytebuffer (including the offset).
     bytebuffer &= (((uint32_t)bytebuffer_tmp)<<bit_offset);
