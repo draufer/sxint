@@ -239,7 +239,6 @@ void sx_set_channel(uint8_t channel, uint8_t data)
 
 /******************** helper ****************************/
 
-#if 0
 /* did a full base frame arrived in the mean time? */
 static noinline bool sx_wait_base_frame(void)
 {
@@ -257,7 +256,6 @@ static noinline bool sx_wait_base_frame(void)
 	}
 	return false;
 }
-#endif
 
 /* init wait for full frame */
 static noinline void sx_wait_frame_init(void)
@@ -442,7 +440,8 @@ void sx_tick(void)
  */
 static __attribute__((__signal__, __used__, __optimize__("O3"))) void edge_falling(void)
 {
-    static const uint8_t bit_masks[8] PROGMEM = {0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01};
+    //static const uint8_t bit_masks[8] PROGMEM = {0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01};
+    static const uint8_t bit_masks[8] PROGMEM = {0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80};
     uint16_t local_bit_num = sx_nxt_bit_num;
     uint16_t byte_num;
     uint8_t bit_mask;
@@ -463,6 +462,9 @@ static __attribute__((__signal__, __used__, __optimize__("O3"))) void edge_falli
             PORTD |= _BV(SX_WRITE);
         else
             PORTD &= ~_BV(SX_WRITE);
+        
+        /* Set the dir byte to 0 after the bit was written */
+        sx_raw_bits_out_dir[byte_num] &= ~bit_mask;
     }
     else
     {
@@ -489,11 +491,11 @@ static __attribute__((__signal__, __used__, __optimize__("O3"))) void edge_risin
 	PORTC ^= _BV(PC7);
 
 	/* shift current byte up */
-	lc_byte = c_byte << 1;
+	lc_byte = c_byte >> 1;
 
 	/* copy data bit state */
 	if (!!(PIND & _BV(SX_DATA)))
-		lc_byte |= 1;
+		lc_byte |= 0x80;
 
 	/* put new byte in place or write back byte under construction */
 	local_bit_num++;

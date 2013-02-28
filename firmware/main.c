@@ -72,11 +72,11 @@ int main(void)
 
             if (buf[0] == '=' && n == 3)
             {
-                sx_set_channel(buf[1] - 48, buf[2]);
+                sx_set_channel(buf[1] - 48, 0x1);
             }
             if (buf[0] == '?' && n == 2)
             {
-                //usb_serial_putchar(sx_get_state());
+                usb_serial_putchar(sx_get_state());
                 usb_serial_putchar(buf[1] - 48);
                 usb_serial_putchar(sx_get_channel(buf[1] - 48));
                 usb_serial_putchar('\n');
