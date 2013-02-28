@@ -39,10 +39,13 @@
 #include <string.h>
 #include <stdbool.h>
 #include <avr/interrupt.h>
+#include <avr/pgmspace.h>
 #include "sx.h"
 
 #define anum(x) (sizeof(x)/sizeof(*(x)))
 #define noinline __attribute__((__noinline__))
+#define likely(x) __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
 
 /*
  * Sync Channel Format
@@ -80,14 +83,14 @@ static enum sx_internal_state internal_state;
  */
 void sx_init()
 {
-	DDRD &= ~(1<<SX_CLK); /* SX-Clock as Input */
-	DDRD &= ~(1<<SX_DATA); /* SX-Data as Input */
-	DDRD &= ~(1<<SX_WRITE); /* SX-Output as High impedance^w^w Input */
+	DDRD &= ~_BV(SX_CLK); /* SX-Clock as Input */
+	DDRD &= ~_BV(SX_DATA); /* SX-Data as Input */
+	DDRD &= ~_BV(SX_WRITE); /* SX-Output as High impedance^w^w Input */
 #if 0
-	PORTD |= (1<<SX_DATA); /* enable pullup resistors */
-	PORTD |= (1<<SX_CLK); /* enable pullup resistors */
+    PORTD |= _BV(SX_DATA); /* enable pullup resistors */
+    PORTD |= _BV(SX_CLK); /* enable pullup resistors */
 #endif
-	PORTD &= ~(1<<SX_WRITE); /* disable pullup resistors */
+	PORTD &= ~_BV(SX_WRITE); /* disable pullup resistors */
 
 	/* bring raw bits array in start state */
 	memset(sx_raw_bits_in, 0xff, sizeof(sx_raw_bits_in));
@@ -101,34 +104,32 @@ void sx_init()
 	sx_frame_gen_cnt = 0;
 	internal_state = SX_SEARCH_SYNC;
 
-	//PORTC |= (1<<PC7);
+	//PORTC |= _BV(PC7);
 
 	/* Set interrupt control register */
-/* TODO: timing is unclear */
+/* TODO: timing is still unclear */
 /*************/
 	/*
 	 * Bad diagrams FTW....
 	 *
 	 * It is NOT clear when data on the wire will be valid/sampled by which party.
-	 * It looks like the data will be valid on the rising edge.
-	 * Problem:
-	 * If we override the data with a write only on the rising edge, we smear into
-	 * the next bit, so we would need to reset our override on the falling edge,
-	 * and hope signal settels till rising edge.
 	 *
-	 * Problem is, when will the main station sample the written data??
-	 * On the next falling edge? At the instant of the rising edge?
-	 * How should we be able till then to override the data?
-	 * Or write on Falling edge, sample on rising edge?
+	 * From lurking and a LOT of reading, it seams that:
 	 *
-	 * All very confusiong and with too much if/when/maybe/how should that work.
+	 * 1) on falling edge the main station sets up the data
+	 *   -> every other writer should also set up it's data to have it
+	 *      ready for the rising edge.
+	 * 2) on rising edge data will be read
+	 *   -> every one and the main Station sample the data
 	 *
+	 * But this is all a guess....
 	 */
 /*************/
-	/* rising edge creates Interrupt */
-	EICRA |= (1<<ISC00) | (1<<ISC01);
-	/* activate external interupt */
-	EIMSK |= (1<<INT0);
+    /* rising edge creates Interrupt */
+    EICRA  = (EICRA & ~(_BV(ISC00)|_BV(ISC01))) | _BV(ISC00);
+    /* activate external interupt */
+	EIMSK |= _BV(INT0);
+
 }
 
 /*************************** functions ********************/
@@ -238,6 +239,7 @@ void sx_set_channel(uint8_t channel, uint8_t data)
 
 /******************** helper ****************************/
 
+#if 0
 /* did a full base frame arrived in the mean time? */
 static noinline bool sx_wait_base_frame(void)
 {
@@ -255,6 +257,7 @@ static noinline bool sx_wait_base_frame(void)
 	}
 	return false;
 }
+#endif
 
 /* init wait for full frame */
 static noinline void sx_wait_frame_init(void)
@@ -430,65 +433,84 @@ void sx_tick(void)
 
 /*
  * interrupt service routine (AVR INT0)
- * driven by RISING clock signal T0 (SX pin 1)
+ * driven by FALLING clock signal T0 (SX pin 1)
  *
  * yes, the compiler whines that this is not a know signal,
  * that is OK, all he should do is fill in the special interrupt
  * prolouge and epilouge, since we branch here without.
  *
  */
-static __attribute__((__signal__, __used__)) void edge_rising(void)
+static __attribute__((__signal__, __used__, __optimize__("O3"))) void edge_falling(void)
 {
-	bool act_bit;
+    static const uint8_t bit_masks[8] PROGMEM = {0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01};
+    uint16_t local_bit_num = sx_nxt_bit_num;
+    uint16_t byte_num;
+    uint8_t bit_mask;
+
+    /* toggle led for debug */
+    PORTC ^= (1<<PC7);
+
+    /* precalc offsets */
+    byte_num = local_bit_num / UINT8_T_BIT;
+    bit_mask = pgm_read_byte(bit_masks + (local_bit_num % UINT8_T_BIT));
+
+    /* get direction */
+    if(unlikely(!!(sx_raw_bits_out_dir[byte_num] & bit_mask)))
+    {
+        DDRD |= _BV(SX_WRITE);
+        /* get write data */
+        if(!!(sx_raw_bits_out_data[byte_num] & bit_mask))
+            PORTD |= _BV(SX_WRITE);
+        else
+            PORTD &= ~_BV(SX_WRITE);
+    }
+    else
+    {
+        DDRD &= ~_BV(SX_WRITE);
+        PORTD &= ~_BV(SX_WRITE);
+    }
+}
+
+/*
+ * interrupt service routine (AVR INT0)
+ * driven by RISING clock signal T0 (SX pin 1)
+ *
+ * same as above
+ */
+static __attribute__((__signal__, __used__, __optimize__("O3"))) void edge_rising(void)
+{
+	static uint8_t c_byte;
 	uint16_t local_bit_num = sx_nxt_bit_num;
-	uint16_t byte_num;
-	uint8_t bit_mask;
+	uint8_t lc_byte;
+
+	/* compiletime_assert(0 == SX_FRAME_BIT % UINT8_T_BIT) */
 
 	/* toggle led for debug */
-	PORTC ^= (1<<PC7);
+	PORTC ^= _BV(PC7);
 
-	/* precalc offsets */
-	byte_num = local_bit_num / UINT8_T_BIT;
-	bit_mask = ((uint8_t)1) << (local_bit_num % UINT8_T_BIT);
+	/* shift current byte up */
+	lc_byte = c_byte << 1;
 
 	/* copy data bit state */
-	act_bit = !!(PIND & (1<<SX_DATA));
-	if(act_bit)
-		sx_raw_bits_in[byte_num] |= bit_mask;
-	else
-		sx_raw_bits_in[byte_num] &= ~bit_mask;
+	if (!!(PIND & _BV(SX_DATA)))
+		lc_byte |= 1;
 
-#if 1
-	/* get direction */
-	act_bit = !!(sx_raw_bits_out_dir[byte_num] & bit_mask);
-	if(act_bit)
-		DDRD |= (1<<SX_WRITE);
+	/* put new byte in place or write back byte under construction */
+	local_bit_num++;
+	if (unlikely(0 == (local_bit_num % UINT8_T_BIT)))
+		sx_raw_bits_in[(local_bit_num / UINT8_T_BIT)-1] = lc_byte;
 	else
-		DDRD &= ~(1<<SX_WRITE);
-
-	/* get write data */
-	act_bit = !!(sx_raw_bits_out_data[byte_num] & bit_mask);
-	if(act_bit)
-		PORTD |= (1<<SX_WRITE);
-	else
-		PORTD &= ~(1<<SX_WRITE);
-#endif
+		c_byte = lc_byte;
 
 	/* check if we received one complete Frame */
-	local_bit_num++;
 	if(local_bit_num >= SX_FRAME_BIT) {
 		local_bit_num = 0; /* overflow */
 		sx_frame_gen_cnt++; /* create new generation */
 	}
 	/* write bit number back */
 	sx_nxt_bit_num = local_bit_num;
-    
-    /*
-        TODO: Unset the bit that was just written in sx_raw_bits_dir
-        to not send them again in the next cycle. This should be done
-        at the end of the interrupt to not delay the pullup further.
-    */
 }
+
 
 /*
  * Interrupt routine for INT0 -> SX_CLK
@@ -496,36 +518,30 @@ static __attribute__((__signal__, __used__)) void edge_rising(void)
 ISR(INT0_vect, __attribute__((__naked__)))
 {
 	/*
-	 * for minimal latency on falling edge, we hand craft
-	 * the routine, we do not need a frame or anything
-	 * to check the clock and clear the pins.
-	 * (Esp. the big pro-/epilouge the rising edge function creates)
-	 *
-	 * only when the clock is high, we need the full
-	 * wham-o, so branch to a routine which does the magic dance.
+	 * the work on falling edge (write setup time)
+	 * and rising edge (data read time) is a little
+	 * different.
+	 * Since we only have 10us for write setup but
+	 * 40us for read, hard code a min latency (no prolouge)
+	 * jump to the right function to handle it.
+	 * Combining it all in one func lets the compiler explode
+	 * the prologue
 	 */
 #if 0
 	if(PIND & (1<<SX_CLK)) { /* clock hi */
 		edge_rising();
 	} else { /* clock lo */
-		DDRD &= ~(1<<SX_WRITE);
-		PORTD &= ~(1<<SX_WRITE);
+		edge_falling();
 	}
 #endif
 
 	asm (
-		"sbic	%0, %1\n\t" /* when clock low, skip...  */
-		"rjmp	edge_rising\n\t" /* ...jump to edge_rising */
-		"cbi	%2, %3\n\t" /* else clear output */
-		"cbi	%4, %5\n\t"
-		"reti\n\t" /* return from interrupt */
+		"sbis	%0, %1\n\t" /* when clock high, skip...  */
+		"rjmp	edge_falling\n\t" /* ...jump to edge_falling */
+		"rjmp	edge_rising" /* else jump to edge_rising */
 		:
 		: /* %0 */ "I" (_SFR_IO_ADDR(PIND)),
-		  /* %1 */ "I" (SX_CLK),
-		  /* %2 */ "I" (_SFR_IO_ADDR(DDRD)),
-		  /* %3 */ "I" (SX_WRITE),
-		  /* %4 */ "I" (_SFR_IO_ADDR(PORTD)),
-		  /* %5 */ "I" (SX_WRITE)
+		  /* %1 */ "I" (SX_CLK)
 	);
 }
 
