@@ -465,19 +465,12 @@ uint8_t usb_configured(void)
 /* get the next character, or -1 if nothing received */
 int16_t usb_serial_getchar(void)
 {
-	uint8_t c, intr_state;
+	uint8_t c;
 
-	/*
-	 * interrupts are disabled so these functions can be
-	 * used from the main program or interrupt context,
-	 * even both in the same program!
-	 */
-	intr_state = SREG;
-	cli();
-	if (!usb_configuration) {
-		SREG = intr_state;
+	// TODO: recheck configured on retry?
+	if (unlikely(!usb_configuration))
 		return -1;
-	}
+
 	UENUM = CDC_RX_ENDPOINT;
 retry:
 	c = UEINTX;
@@ -487,7 +480,6 @@ retry:
 			UEINTX = 0x6B;
 			goto retry;
 		}
-		SREG = intr_state;
 		return -1;
 	}
 	/* take one byte out of the buffer */
@@ -495,44 +487,37 @@ retry:
 	/* if buffer completely used, release it */
 	if (!(UEINTX & _BV(RWAL)))
 		UEINTX = 0x6B;
-	SREG = intr_state;
+
 	return c;
 }
 
 /* number of bytes available in the receive buffer */
 uint8_t usb_serial_available(void)
 {
-	uint8_t n=0, i, intr_state;
+	uint8_t n;
 
-	intr_state = SREG;
-	cli();
-	if (usb_configuration) {
-		UENUM = CDC_RX_ENDPOINT;
-		n = UEBCLX;
-		if (!n) {
-			i = UEINTX;
-			if (i & _BV(RXOUTI) && !(i & _BV(RWAL)))
-				UEINTX = 0x6B;
-		}
+	if (unlikely(!usb_configuration))
+		return 0;
+
+	UENUM = CDC_RX_ENDPOINT;
+	n = UEBCLX;
+	if (!n) {
+		uint8_t i = UEINTX;
+		if (i & _BV(RXOUTI) && !(i & _BV(RWAL)))
+			UEINTX = 0x6B;
 	}
-	SREG = intr_state;
 	return n;
 }
 
 /* discard any buffered input */
 void usb_serial_flush_input(void)
 {
-	uint8_t intr_state;
+	if (unlikely(!usb_configuration))
+		return;
 
-	if (usb_configuration) {
-		intr_state = SREG;
-		cli();
-		UENUM = CDC_RX_ENDPOINT;
-		while ((UEINTX & _BV(RWAL))) {
-			UEINTX = 0x6B;
-		}
-		SREG = intr_state;
-	}
+	UENUM = CDC_RX_ENDPOINT;
+	while ((UEINTX & _BV(RWAL)))
+		UEINTX = 0x6B;
 }
 
 /* transmit a character.  0 returned on success, -1 on error */
@@ -593,7 +578,7 @@ int8_t GCC_ATTR_OPTIMIZE("O3") usb_serial_putchar(uint8_t c)
 
 OUT_ERR:
 	transmit_flush_timer = 1;
-	return 1;
+	return -1;
 }
 
 
@@ -603,25 +588,25 @@ OUT_ERR:
  */
 int8_t usb_serial_putchar_nowait(uint8_t c)
 {
-	uint8_t intr_state;
-
-	if (!usb_configuration)
+	if (unlikely(!usb_configuration))
 		return -1;
-	intr_state = SREG;
-	cli();
+
+	/* reset flush timer to prevent interrupt from flushing while we write */
+	transmit_flush_timer = 0;
+
 	UENUM = CDC_TX_ENDPOINT;
-	if (!(UEINTX & _BV(RWAL))) {
+	if (unlikely(!(UEINTX & _BV(RWAL)))) {
 		/* buffer is full */
-		SREG = intr_state;
+		transmit_flush_timer = 1;
 		return -1;
 	}
+
 	/* actually write the byte into the FIFO */
 	UEDATX = c;
 	/* if this completed a packet, transmit it now! */
 	if (!(UEINTX & _BV(RWAL)))
 		UEINTX = 0x3A;
 	transmit_flush_timer = TRANSMIT_FLUSH_TIMEOUT;
-	SREG = intr_state;
 	return 0;
 }
 
@@ -640,25 +625,23 @@ int8_t usb_serial_putchar_nowait(uint8_t c)
  */
 int8_t usb_serial_write(const uint8_t *buffer, uint16_t size)
 {
-	uint8_t intr_state;
+	bool o_flush_timer;
 
 	/* if we're not online (enumerated and configured), error */
-	if (!usb_configuration)
+	if (unlikely(!usb_configuration))
 		return -1;
-	/*
-	 * interrupts are disabled so these functions can be
-	 * used from the main program or interrupt context,
-	 * even both in the same program!
-	 */
-	intr_state = SREG;
+
+	/* reset flush timer to prevent interrupt from flushing while we write */
 	cli();
+	o_flush_timer = !!transmit_flush_timer;
+	transmit_flush_timer = 0;
+	sei();
+
 	UENUM = CDC_TX_ENDPOINT;
 	/* if we gave up due to timeout before, don't wait again */
 	if (transmit_previous_timeout) {
-		if (!(UEINTX & _BV(RWAL))) {
-			SREG = intr_state;
-			return -1;
-		}
+		if (!(UEINTX & _BV(RWAL)))
+			goto OUT_ERR;
 		transmit_previous_timeout = 0;
 	}
 	/* each iteration of this loop transmits a packet */
@@ -669,24 +652,24 @@ int8_t usb_serial_write(const uint8_t *buffer, uint16_t size)
 		uint8_t timeout = UDFNUML + TRANSMIT_TIMEOUT;
 		while (1) {
 			/* are we ready to transmit? */
-			if (UEINTX & _BV(RWAL))
+			if (likely(UEINTX & _BV(RWAL)))
 				break;
-			SREG = intr_state;
 			/*
 			 * have we waited too long?  This happens if the user
 			 * is not running an application that is listening
 			 */
-			if (UDFNUML == timeout) {
+			if (unlikely(UDFNUML == timeout)) {
 				transmit_previous_timeout = 1;
-				return -1;
+				goto OUT_ERR;
 			}
 			/* has the USB gone offline? */
-			if (!usb_configuration)
+			if (unlikely(!usb_configuration))
 				return -1;
 			/* get ready to try checking again */
-			intr_state = SREG;
-			cli();
-			UENUM = CDC_TX_ENDPOINT;
+			if (unlikely(o_flush_timer)) {
+				transmit_flush_timer = 1;
+				o_flush_timer = false;
+			}
 		}
 		}
 
@@ -799,33 +782,36 @@ int8_t usb_serial_write(const uint8_t *buffer, uint16_t size)
 		/* if this completed a packet, transmit it now! */
 		if (!(UEINTX & _BV(RWAL)))
 			UEINTX = 0x3A;
-		transmit_flush_timer = TRANSMIT_FLUSH_TIMEOUT;
-		SREG = intr_state;
+		o_flush_timer = true;
 	}
+	if (o_flush_timer)
+		transmit_flush_timer = TRANSMIT_FLUSH_TIMEOUT;
 	return 0;
+
+OUT_ERR:
+	transmit_flush_timer = 1;
+	return -1;
 }
 
 int8_t usb_serial_write_str(const char *str)
 {
-	uint8_t intr_state;
+	bool o_flush_timer;
 
 	/* if we're not online (enumerated and configured), error */
 	if (!usb_configuration)
 		return -1;
-	/*
-	 * interrupts are disabled so these functions can be
-	 * used from the main program or interrupt context,
-	 * even both in the same program!
-	 */
-	intr_state = SREG;
+
+	/* reset flush timer to prevent interrupt from flushing while we write */
 	cli();
+	o_flush_timer = !!transmit_flush_timer;
+	transmit_flush_timer = 0;
+	sei();
+
 	UENUM = CDC_TX_ENDPOINT;
 	/* if we gave up due to timeout before, don't wait again */
-	if (transmit_previous_timeout) {
-		if (!(UEINTX & _BV(RWAL))) {
-			SREG = intr_state;
-			return -1;
-		}
+	if (unlikely(transmit_previous_timeout)) {
+		if (!(UEINTX & _BV(RWAL)))
+			goto OUT_ERR;
 		transmit_previous_timeout = 0;
 	}
 	/* each iteration of this loop transmits a packet */
@@ -837,24 +823,24 @@ int8_t usb_serial_write_str(const char *str)
 		uint8_t timeout = UDFNUML + TRANSMIT_TIMEOUT;
 		while (1) {
 			/* are we ready to transmit? */
-			if (UEINTX & _BV(RWAL))
+			if (likely(UEINTX & _BV(RWAL)))
 				break;
-			SREG = intr_state;
 			/*
 			 * have we waited too long?  This happens if the user
 			 * is not running an application that is listening
 			 */
-			if (UDFNUML == timeout) {
+			if (unlikely(UDFNUML == timeout)) {
 				transmit_previous_timeout = 1;
-				return -1;
+				goto OUT_ERR;
 			}
 			/* has the USB gone offline? */
-			if (!usb_configuration)
+			if (unlikely(!usb_configuration))
 				return -1;
 			/* get ready to try checking again */
-			intr_state = SREG;
-			cli();
-			UENUM = CDC_TX_ENDPOINT;
+			if (unlikely(o_flush_timer)) {
+				transmit_flush_timer = 1;
+				o_flush_timer = false;
+			}
 		}
 		}
 
@@ -867,37 +853,41 @@ int8_t usb_serial_write_str(const char *str)
 		/* if this completed a packet, transmit it now! */
 		if (!(UEINTX & _BV(RWAL)))
 			UEINTX = 0x3A;
-		transmit_flush_timer = TRANSMIT_FLUSH_TIMEOUT;
-		SREG = intr_state;
+		o_flush_timer = true;
 	}
+	if (o_flush_timer)
+		transmit_flush_timer = TRANSMIT_FLUSH_TIMEOUT;
 	return 0;
+
+OUT_ERR:
+	transmit_flush_timer = 1;
+	return -1;
 }
 
 int8_t usb_serial_write_str_PGM(PGM_P str)
 {
-	uint8_t intr_state;
+	bool o_flush_timer;
 
 	/* if we're not online (enumerated and configured), error */
-	if (!usb_configuration)
+	if (unlikely(!usb_configuration))
 		return -1;
-	/*
-	 * interrupts are disabled so these functions can be
-	 * used from the main program or interrupt context,
-	 * even both in the same program!
-	 */
-	intr_state = SREG;
+
+	/* reset flush timer to prevent interrupt from flushing while we write */
 	cli();
+	o_flush_timer = !!transmit_flush_timer;
+	transmit_flush_timer = 0;
+	sei();
+
 	UENUM = CDC_TX_ENDPOINT;
 	/* if we gave up due to timeout before, don't wait again */
-	if (transmit_previous_timeout) {
-		if (!(UEINTX & _BV(RWAL))) {
-			SREG = intr_state;
-			return -1;
-		}
+	if (unlikely(transmit_previous_timeout)) {
+		if (!(UEINTX & _BV(RWAL)))
+			goto OUT_ERR;
 		transmit_previous_timeout = 0;
 	}
 	/* each iteration of this loop transmits a packet */
-	while (pgm_read_byte(str)) {
+	while (pgm_read_byte(str))
+	{
 		uint8_t write_size;
 		char c;
 		{
@@ -905,24 +895,24 @@ int8_t usb_serial_write_str_PGM(PGM_P str)
 		uint8_t timeout = UDFNUML + TRANSMIT_TIMEOUT;
 		while (1) {
 			/* are we ready to transmit? */
-			if (UEINTX & _BV(RWAL))
+			if (likely(UEINTX & _BV(RWAL)))
 				break;
-			SREG = intr_state;
 			/*
 			 * have we waited too long?  This happens if the user
 			 * is not running an application that is listening
 			 */
-			if (UDFNUML == timeout) {
+			if (unlikely(UDFNUML == timeout)) {
 				transmit_previous_timeout = 1;
-				return -1;
+				goto OUT_ERR;
 			}
 			/* has the USB gone offline? */
-			if (!usb_configuration)
+			if (unlikely(!usb_configuration))
 				return -1;
 			/* get ready to try checking again */
-			intr_state = SREG;
-			cli();
-			UENUM = CDC_TX_ENDPOINT;
+			if (unlikely(o_flush_timer)) {
+				transmit_flush_timer = 1;
+				o_flush_timer = false;
+			}
 		}
 		}
 
@@ -935,10 +925,15 @@ int8_t usb_serial_write_str_PGM(PGM_P str)
 		/* if this completed a packet, transmit it now! */
 		if (!(UEINTX & _BV(RWAL)))
 			UEINTX = 0x3A;
-		transmit_flush_timer = TRANSMIT_FLUSH_TIMEOUT;
-		SREG = intr_state;
+		o_flush_timer = true;
 	}
+	if (o_flush_timer)
+		transmit_flush_timer = TRANSMIT_FLUSH_TIMEOUT;
 	return 0;
+
+OUT_ERR:
+	transmit_flush_timer = 1;
+	return -1;
 }
 
 /*
@@ -949,15 +944,18 @@ int8_t usb_serial_write_str_PGM(PGM_P str)
  */
 void usb_serial_flush_output(void)
 {
+	uint8_t o_flush_timer;
+
+	/* snag and bag transmit timer */
 	cli();
-	if (transmit_flush_timer) {
-		transmit_flush_timer = 0;
-		sei();
+	o_flush_timer = transmit_flush_timer;
+	transmit_flush_timer = 0;
+	sei();
+
+	if (o_flush_timer) {
 		UENUM = CDC_TX_ENDPOINT;
 		UEINTX = 0x3A;
 	}
-	else
-		sei();
 }
 
 /*
@@ -970,15 +968,8 @@ void usb_serial_flush_output(void)
  */
 int8_t usb_serial_set_control(uint8_t signals)
 {
-	uint8_t intr_state;
-
-	intr_state = SREG;
-	cli();
-	if (!usb_configuration) {
-		/* we're not enumerated/configured */
-		SREG = intr_state;
+	if (unlikely(!usb_configuration)) /* we're not enumerated/configured */
 		return -1;
-	}
 
 	UENUM = CDC_ACM_ENDPOINT;
 	if (!(UEINTX & _BV(RWAL))) {
@@ -987,7 +978,6 @@ int8_t usb_serial_set_control(uint8_t signals)
 		 * TODO; should this try to abort the previously
 		 * buffered message??
 		 */
-		SREG = intr_state;
 		return -1;
 	}
 	UEDATX = 0xA1;
@@ -1000,7 +990,6 @@ int8_t usb_serial_set_control(uint8_t signals)
 	UEDATX = 0;
 	UEDATX = signals;
 	UEINTX = 0x3A;
-	SREG = intr_state;
 	return 0;
 }
 
