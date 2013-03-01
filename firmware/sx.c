@@ -43,9 +43,46 @@
 #include "sx.h"
 
 #define anum(x) (sizeof(x)/sizeof(*(x)))
-#define noinline __attribute__((__noinline__))
-#define likely(x) __builtin_expect(!!(x), 1)
-#define unlikely(x) __builtin_expect(!!(x), 0)
+	/* divide while always rounding up */
+#define DIV_ROUNDUP(a, b) \
+	(((a) + (b) - 1) / (b))
+	/* helper to check GCC version */
+#if defined __GNUC__ && defined __GNUC_MINOR__
+# define _GNUC_PREREQ(maj, min) \
+	((__GNUC__ << 16) + __GNUC_MINOR__ >= ((maj) << 16) + (min))
+#else
+# define _GNUC_PREREQ(maj, min) 0
+#endif
+	/* can we use attributes */
+#if defined(__GNUC__) && __GNUC__ >= 2
+# define GCC_ATTRIB(x) __attribute__((x))
+#else
+# define GCC_ATTRIB(x)
+# define __attribute__(xyz)	/* Ignore */
+#endif
+	/* help compiler on conditional jump decisions */
+#if _GNUC_PREREQ (2,96)
+# define likely(x)	__builtin_expect(!!(x), 1)
+# define unlikely(x)	__builtin_expect(!!(x), 0)
+#else
+# define likely(x)	(x)
+# define unlikely(x)	(x)
+#endif
+	/* prevent the compiler from inlining */
+#if _GNUC_PREREQ (3,1)
+# undef noinline
+# define noinline GCC_ATTRIB(__noinline__)
+#else
+# ifndef noinline
+#  define noinline
+# endif
+#endif
+	/* deviate from the global optimisation setting */
+#if _GNUC_PREREQ (4,4)
+# define GCC_ATTR_OPTIMIZE(x) GCC_ATTRIB(__optimize__ (x))
+#else
+# define GCC_ATTR_OPTIMIZE(x)
+#endif
 
 /*
  * Sync Channel Format
@@ -57,14 +94,26 @@
  *    1   Grundrahmen    ca. 4,8 ms
  *    1   Gesamtrahmen   ca.  80 ms (= 16 Grundrahmen)
  */
+#define PADDING_BIT_MSK 0x924
+#define PADDING_BIT_MSK_N ((~PADDING_BIT_MSK)&0xfff)
 
+/**************** types ********************************/
+
+/* data type to hold an bit-unaligned channel */
+#if _GNUC_PREREQ(4,7)
+typedef __uint24 sx_wild_channel;
+# define ARR_EXTRA_SP 1
+#else
+typedef uint32_t sx_wild_channel;
+# define ARR_EXTRA_SP 2
+#endif
 
 /****************** vars ******************************/
 
 /* raw bit arrays */
-static uint8_t sx_raw_bits_in[((SX_FRAME_LEN * SX_BITCOUNT) + (UINT8_T_BIT-1))/UINT8_T_BIT];
-static uint8_t sx_raw_bits_out_dir[((SX_FRAME_LEN * SX_BITCOUNT) + (UINT8_T_BIT-1))/UINT8_T_BIT];
-static uint8_t sx_raw_bits_out_data[((SX_FRAME_LEN * SX_BITCOUNT) + (UINT8_T_BIT-1))/UINT8_T_BIT];
+static uint8_t sx_raw_bits_in[DIV_ROUNDUP(SX_FRAME_BIT, UINT8_T_BIT) + ARR_EXTRA_SP]; /* use more bytes to help with overread and overwrite */
+static uint8_t sx_raw_bits_out_dir[DIV_ROUNDUP(SX_FRAME_BIT, UINT8_T_BIT) + ARR_EXTRA_SP];
+static uint8_t sx_raw_bits_out_data[DIV_ROUNDUP(SX_FRAME_BIT, UINT8_T_BIT) + ARR_EXTRA_SP];
 /* interrupt position */
 volatile uint16_t sx_nxt_bit_num;
 volatile uint8_t sx_frame_gen_cnt;
@@ -87,8 +136,8 @@ void sx_init()
 	DDRD &= ~_BV(SX_DATA); /* SX-Data as Input */
 	DDRD &= ~_BV(SX_WRITE); /* SX-Output as High impedance^w^w Input */
 #if 0
-    PORTD |= _BV(SX_DATA); /* enable pullup resistors */
-    PORTD |= _BV(SX_CLK); /* enable pullup resistors */
+	PORTD |= _BV(SX_DATA); /* enable pullup resistors */
+	PORTD |= _BV(SX_CLK); /* enable pullup resistors */
 #endif
 	PORTD &= ~_BV(SX_WRITE); /* disable pullup resistors */
 
@@ -107,7 +156,6 @@ void sx_init()
 	//PORTC |= _BV(PC7);
 
 	/* Set interrupt control register */
-/* TODO: timing is still unclear */
 /*************/
 	/*
 	 * Bad diagrams FTW....
@@ -122,14 +170,13 @@ void sx_init()
 	 * 2) on rising edge data will be read
 	 *   -> every one and the main Station sample the data
 	 *
-	 * But this is all a guess....
+	 * This looks to be the rules du SX
 	 */
 /*************/
-    /* rising edge creates Interrupt */
-    EICRA  = (EICRA & ~(_BV(ISC00)|_BV(ISC01))) | _BV(ISC00);
-    /* activate external interupt */
+	/* rising and falling edge creates Interrupt */
+	EICRA  = (EICRA & ~(_BV(ISC00)|_BV(ISC01))) | _BV(ISC00);
+	/* activate external interupt */
 	EIMSK |= _BV(INT0);
-
 }
 
 /*************************** functions ********************/
@@ -139,102 +186,185 @@ enum sx_internal_state sx_get_state(void)
 	return internal_state;
 }
 
-uint16_t sx_get_startbit(uint8_t channel)
+static noinline uint16_t GCC_ATTR_OPTIMIZE("O3")  sx_get_startbit(uint8_t channel)
 {
-    /* naming:
-       Number of base frames: SX_BASE_FRAME_CNT (16)
-       Number of info channels per base frame: SX_BASE_FRAME_INFO_CNT (7)
-    
-	   formula in arduino code: _channel = (15-_baseAdr) + ((6-_dataFrameCount)<<4);
-       example bitpos lok01: 1428
-
-       computation:
-       
-       channel  = 1 (lok01)                   1
-	   tFrame   = channel / 16;               0
-	   tBase    = channel % 16;               1
-	   Frame    = 7 - tFrame;                 7
-	   Base     = 15 - tBase;                 14
-	   bit_addr = Base * 8 * 12 + frame * 12; 1428
-    */
-
-    return (((SX_BASE_FRAME_CNT - 1) - (channel % SX_BASE_FRAME_CNT))) * 8 * 12
-        + (SX_BASE_FRAME_INFO_CNT - (channel / SX_BASE_FRAME_CNT)) * 12;
-    
+	/* naming:
+	 *
+	 * Number of base frames: SX_BASE_FRAME_CNT (16)
+	 * Number of info channels per base frame: SX_BASE_FRAME_INFO_CNT (7)
+	 * Number of bits in an SX byte: SX_BITCOUNT (12)
+	 *
+	 * formula in arduino code: _channel = (15-_baseAdr) + ((6-_dataFrameCount)<<4);
+	 * example bitpos lok01: 1428
+	 *
+	 * computation:
+	 * channel  = 1 (lok01)                   1
+	 * tFrame   = channel / 16;               0
+	 * tBase    = channel % 16;               1
+	 * Frame    = 7 - tFrame;                 7
+	 * Base     = 15 - tBase;                 14
+	 * bit_addr = Base * 8 * 12 + frame * 12; 1428
+	 */
+	return (((SX_BASE_FRAME_CNT - 1) - (channel % SX_BASE_FRAME_CNT))) * 8 * SX_BITCOUNT
+	       + (SX_BASE_FRAME_INFO_CNT - (channel / SX_BASE_FRAME_CNT)) * SX_BITCOUNT;
 }
 
-uint8_t sx_get_channel(uint8_t channel)
+/* expand data to wire bit pattern */
+static uint16_t sx_data_expand(uint8_t data)
 {
-    /*
-        TODO: The variables need to be cleaned
-    */
-        
-    uint8_t channelbyte = 0;            // The channel information result (8 bit payload)
-    uint16_t bitpos = sx_get_startbit(channel); // the postion of the first bit in the buffer
-    uint8_t bit_offset = bitpos % 8;    // the offset from the beginning of the first byte it is stored in
-    uint8_t start_byte = bitpos / 8;    // the first byte that contains the payload
-    uint32_t bytebuffer = 0;
-    uint8_t i;
-    
-    for (i = 0; i < 3; i++)
-    {
-        bytebuffer |= (((uint32_t)sx_raw_bits_in[(start_byte + i)
-            % (SX_FRAME_BYTES*SX_BASE_FRAME_CNT)])<<(i*8));
-    }
-    
-    uint16_t bytebuff_s = (((uint32_t)bytebuffer) >> bit_offset);
-    channelbyte |= ((bytebuff_s & (0x3 << 0)) >> 0);
-    channelbyte |= ((bytebuff_s & (0x3 << 3)) >> 1);
-    channelbyte |= ((bytebuff_s & (0x3 << 6)) >> 2);
-    channelbyte |= ((bytebuff_s & (0x3 << 9)) >> 3);
-    return channelbyte;
-
+	uint16_t res;
+	/* spread out date bytes in buffer */
+	res  =            (data & (0x3 << 0))  << 0;
+	res |=            (data & (0x3 << 2))  << 1;
+	res |=            (data & (0x3 << 4))  << 2;
+	res |= ((uint16_t)(data & (0x3 << 6))) << 3;
+	/* add the padding bits */
+	return res | PADDING_BIT_MSK;
 }
 
-void sx_set_channel(uint8_t channel, uint8_t data)
+/* extract data bits from wire bit pattern */
+static uint8_t sx_data_colapse(uint16_t wdata)
 {
-    uint16_t bitpos = sx_get_startbit(channel); // the postion of the first bit in the buffer
-    uint8_t bit_offset = bitpos % 8;    // the offset from the beginning of the first byte it is stored in
-    uint8_t start_byte = bitpos / 8;    // the first byte that contains the payload
-    uint32_t bytebuffer = 0xffffffff;
-    uint32_t bytemask = 0;
-    uint8_t i;
-    
-    // The bit positions we want to write are turned to 1
-    bytemask = (((uint32_t)0x3ff)<<bit_offset);
-    
-    uint16_t databuffer = (uint16_t)data;
-    
-    // bytebuffer_tmp is initialized with ones
-    uint16_t bytebuffer_tmp = 0xffff;
-    
-    // the bits that are zeros in data/databuffer are set zero in bytebuffer_tmp, too.
-    bytebuffer_tmp &= ~((~databuffer & (0x3 << 0)) << 0);
-    bytebuffer_tmp &= ~((~databuffer & (0x3 << 2)) << 1);
-    bytebuffer_tmp &= ~((~databuffer & (0x3 << 4)) << 2);
-    bytebuffer_tmp &= ~((~databuffer & (0x3 << 6)) << 3);
-    
-    // bytebuffer_tmp is copied to bytebuffer (including the offset).
-    bytebuffer &= (((uint32_t)bytebuffer_tmp)<<bit_offset);
-    
-    // the offset bits are set to ones.
-    bytebuffer |= ((uint32_t)0xff>>(8 - bit_offset));
+	uint8_t res;
+#ifdef I_WANT_CLEAN
+	/* this code lets the compiler get a little freaky: 33 instructions + extra register
+	 * which means more push & pop */
+	res  = (((wdata) & (0x3 << 0)) >> 0);
+	res |= (((wdata) & (0x3 << 3)) >> 1);
+	res |= (((wdata) & (0x3 << 6)) >> 2);
+	res |= (((wdata) & (0x3 << 9)) >> 3);
+#else
+	/* if we reach for asm, use instructions the compiler will never create */
+	asm (
+		"bst	%A1, 0\n\t"
+		"bld	%0, 0\n\t"
+		"bst	%A1, 1\n\t"
+		"bld	%0, 1\n\t"
+		"bst	%A1, 3\n\t"
+		"bld	%0, 2\n\t"
+		"bst	%A1, 4\n\t"
+		"bld	%0, 3\n\t"
+		"bst	%A1, 6\n\t"
+		"bld	%0, 4\n\t"
+		"bst	%A1, 7\n\t"
+		"bld	%0, 5\n\t"
+		"bst	%B1, 1\n\t"
+		"bld	%0, 6\n\t"
+		"bst	%B1, 2\n\t"
+		"bld	%0, 7\n\t"
+		: /* %0 */ "=&r" (res)
+		: /* %1 */ "r" (wdata)
+	);
+#endif
+	return res;
+}
 
-    // the bits are transferred in the data array
-    for (i = 0; i < 3; i++)
-    {
-        // All bits we need to write are initialized with ones.
-        sx_raw_bits_out_data[(start_byte + i) % (SX_FRAME_BYTES*SX_BASE_FRAME_CNT)]
-            |= ((uint8_t)(bytemask>>(i * 8)));
-        
-        // We set the bits that need to be zero to zero (before all relevant bits were turned to one).
-        sx_raw_bits_out_data[(start_byte + i) % (SX_FRAME_BYTES*SX_BASE_FRAME_CNT)]
-            &= ((uint8_t)(bytebuffer>>(i * 8)));
-        
-        // Show the interrupt, that we want to write
-        sx_raw_bits_out_dir[(start_byte + i) % (SX_FRAME_BYTES*SX_BASE_FRAME_CNT)]
-            |= ((uint8_t)(bytemask>>(i * 8)));
-    } 
+uint8_t GCC_ATTR_OPTIMIZE("O3") sx_get_channel(uint8_t channel)
+{
+	sx_wild_channel bytebuffer; /* temporary buffer for read in data */
+	uint16_t bitpos;            /* the postion of the first bit in the buffer */
+	uint8_t bit_offset;         /* the offset from the beginning of the first byte it is stored in */
+	uint8_t start_byte;         /* the first byte that contains the payload */
+
+	/* get channel bit position */
+	bitpos = sx_get_startbit(channel);
+	/* precalc byte stuff */
+	bit_offset = bitpos % UINT8_T_BIT;
+	start_byte = bitpos / UINT8_T_BIT;
+	/* get data */
+#ifdef I_WANT_CLEAN
+	bytebuffer  =                   sx_raw_bits_in[start_byte + 0]  << (0 * UINT8_T_BIT);
+	bytebuffer |= ((uint16_t)       sx_raw_bits_in[start_byte + 1]) << (1 * UINT8_T_BIT);
+	bytebuffer |= ((sx_wild_channel)sx_raw_bits_in[start_byte + 2]) << (2 * UINT8_T_BIT);
+#else
+	/* avr has no alignment, is little endian, so data comes the right way from mem, and as long
+	 * as the compiler does not start to whine like a sissy about aliasing, this generates much better
+	 * code, till someone subregs avr cleanly...
+	 */
+	bytebuffer = *((sx_wild_channel *)(sx_raw_bits_in + start_byte));
+#endif
+	/* shift it down on a byte boundery, extract the data bits from the padding */
+	return sx_data_colapse(bytebuffer >> bit_offset);
+}
+
+void GCC_ATTR_OPTIMIZE("O3") sx_set_channel(uint8_t channel, uint8_t data)
+{
+	sx_wild_channel bytemask, bytebuffer;
+	uint16_t bytebuff_s;
+	uint16_t bitpos;            /* the postion of the first bit in the buffer */
+	uint8_t bit_offset;         /* the offset from the beginning of the first byte it is stored in */
+	uint8_t start_byte;         /* the first byte that contains the payload */
+
+	/* spread out date bytes in buffer */
+	bytebuff_s = sx_data_expand(data);
+	/* get channel bit position */
+	bitpos     = sx_get_startbit(channel);
+	/* precalc byte stuff */
+	bit_offset = bitpos % UINT8_T_BIT;
+	start_byte = bitpos / UINT8_T_BIT;
+
+	/* init vars */
+	bytemask   = PADDING_BIT_MSK_N; /* b011011011011 */
+	bytebuffer = bytebuff_s;
+	/* shift the byte mask up to the right offset */
+#ifdef I_WANT_CLEAN
+	bytebuffer <<= bit_offset;
+	bytemask   <<= bit_offset;
+#else
+	/* the controller only can to single bit shifts, help compiler to do both shift
+	 * in one loop, saving one time loop overhead */
+	while (bit_offset--) {
+		bytebuffer <<= 1;
+		bytemask   <<= 1;
+	}
+#endif
+	/* force compiler to execute shift from above before the following operations */
+	asm("" : : "r" (bytebuffer));
+
+// TODO: How to prevent a half write?
+	/* if the interrupt handler is in the middle of the write data, we are
+	 * about to set, we will put funny things on the SX bus.
+	 */
+
+#ifdef I_WANT_CLEAN
+	{
+	/* use pointer, helps the compiler not get to fancy */
+	uint8_t *rbo_dat = &sx_raw_bits_out_data[start_byte], t_byte, *rbo_dir;
+	rbo_dir = &sx_raw_bits_out_dir[start_byte];
+
+	cli();
+	/* show the interrupt that we want to write these bits */
+	*rbo_dir++ |= bytemask >> (0 * UINT8_T_BIT);
+	*rbo_dir++ |= bytemask >> (1 * UINT8_T_BIT);
+	*rbo_dir++ |= bytemask >> (2 * UINT8_T_BIT);
+	bytemask = ~bytemask;
+	/* bring data in place */
+	t_byte = *rbo_dat;
+	*rbo_dat++ = (t_byte & ((uint8_t)(bytemask >> (0 * UINT8_T_BIT)))) | (uint8_t)(bytebuffer >> (0 * UINT8_T_BIT));
+	t_byte = *rbo_dat;
+	*rbo_dat++ = (t_byte & ((uint8_t)(bytemask >> (1 * UINT8_T_BIT)))) | (uint8_t)(bytebuffer >> (1 * UINT8_T_BIT));
+	t_byte = *rbo_dat;
+	*rbo_dat++ = (t_byte & ((uint8_t)(bytemask >> (2 * UINT8_T_BIT)))) | (uint8_t)(bytebuffer >> (2 * UINT8_T_BIT));
+	sei();
+	}
+#else
+	/* avr has no alignment, is little endian, so data comes the right way to mem, and as long
+	 * as the compiler does not start to whine like a sissy about aliasing, this generates much better
+	 * code, till someone subregs avr cleanly...
+	 * If the compiler is game, this should be 35 clock cycles with interrupts off == 2.19µs@16MHz
+	 */
+	{
+	sx_wild_channel *tp_dat = (sx_wild_channel *)(sx_raw_bits_out_data + start_byte), *tp_dir;
+	tp_dir = (sx_wild_channel *)(sx_raw_bits_out_dir + start_byte);
+
+	cli();
+	/* show the interrupt that we want to write these bits */
+	*tp_dir |= bytemask;
+	/* bring data in place */
+	*tp_dat = (*tp_dat & ~bytemask) | bytebuffer;
+	sei();
+	}
+#endif
 }
 
 /******************** helper ****************************/
@@ -276,7 +406,7 @@ static noinline bool sx_wait_frame(void)
 	diff = sx_frame_gen_cnt - sx_frame_wait.gen;
 	if(0 == diff)
 		return false;
-	if(diff > 2) /* TODO: buggy on generation roll over */
+	if(diff > 2) /* TODO: buggy on generation roll over 0xff->0 */
 		return true;
 
 	bdiff = (sx_nxt_bit_num + SX_FRAME_BIT) - sx_frame_wait.bit;
@@ -438,39 +568,42 @@ void sx_tick(void)
  * prolouge and epilouge, since we branch here without.
  *
  */
-static __attribute__((__signal__, __used__, __optimize__("O3"))) void edge_falling(void)
+static __attribute__((__signal__, __used__)) GCC_ATTR_OPTIMIZE("O3") void edge_falling(void)
 {
-    //static const uint8_t bit_masks[8] PROGMEM = {0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01};
-    static const uint8_t bit_masks[8] PROGMEM = {0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80};
-    uint16_t local_bit_num = sx_nxt_bit_num;
-    uint16_t byte_num;
-    uint8_t bit_mask;
+	static const uint8_t bit_masks[8] PROGMEM = {0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80};
+	uint16_t local_bit_num = sx_nxt_bit_num;
+	uint16_t byte_num;
+	uint8_t bit_mask, l_dir;
 
-    /* toggle led for debug */
-    PORTC ^= (1<<PC7);
+	/* toggle led for debug */
+//	PORTC ^= (1<<PC7);
 
-    /* precalc offsets */
-    byte_num = local_bit_num / UINT8_T_BIT;
-    bit_mask = pgm_read_byte(bit_masks + (local_bit_num % UINT8_T_BIT));
+	/* precalc offsets */
+	byte_num = local_bit_num / UINT8_T_BIT;
+	bit_mask = pgm_read_byte(bit_masks + (local_bit_num % UINT8_T_BIT));
+	/* get direction */
+	l_dir = sx_raw_bits_out_dir[byte_num];
 
-    /* get direction */
-    if(unlikely(!!(sx_raw_bits_out_dir[byte_num] & bit_mask)))
-    {
-        DDRD |= _BV(SX_WRITE);
-        /* get write data */
-        if(!!(sx_raw_bits_out_data[byte_num] & bit_mask))
-            PORTD |= _BV(SX_WRITE);
-        else
-            PORTD &= ~_BV(SX_WRITE);
-        
-        /* Set the dir byte to 0 after the bit was written */
-        sx_raw_bits_out_dir[byte_num] &= ~bit_mask;
-    }
-    else
-    {
-        DDRD &= ~_BV(SX_WRITE);
-        PORTD &= ~_BV(SX_WRITE);
-    }
+	/* act on direction */
+	if(unlikely(!!(l_dir & bit_mask)))
+	{
+		/* Set the dir bit to 0 since we will write the bit */
+		sx_raw_bits_out_dir[byte_num] = l_dir & ~bit_mask;
+		/* get write data */
+		l_dir = sx_raw_bits_out_data[byte_num];
+		/* set direction */
+		DDRD |= _BV(SX_WRITE);
+		/* put write data on pin */
+		if(!!(l_dir & bit_mask))
+			PORTD |= _BV(SX_WRITE);
+		else
+			PORTD &= ~_BV(SX_WRITE);
+	}
+	else
+	{
+		DDRD &= ~_BV(SX_WRITE);
+		PORTD &= ~_BV(SX_WRITE);
+	}
 }
 
 /*
@@ -479,7 +612,7 @@ static __attribute__((__signal__, __used__, __optimize__("O3"))) void edge_falli
  *
  * same as above
  */
-static __attribute__((__signal__, __used__, __optimize__("O3"))) void edge_rising(void)
+static __attribute__((__signal__, __used__)) GCC_ATTR_OPTIMIZE("O3") void edge_rising(void)
 {
 	static uint8_t c_byte;
 	uint16_t local_bit_num = sx_nxt_bit_num;
@@ -490,7 +623,7 @@ static __attribute__((__signal__, __used__, __optimize__("O3"))) void edge_risin
 	/* toggle led for debug */
 	PORTC ^= _BV(PC7);
 
-	/* shift current byte up */
+	/* shift current byte down */
 	lc_byte = c_byte >> 1;
 
 	/* copy data bit state */
@@ -505,7 +638,7 @@ static __attribute__((__signal__, __used__, __optimize__("O3"))) void edge_risin
 		c_byte = lc_byte;
 
 	/* check if we received one complete Frame */
-	if(local_bit_num >= SX_FRAME_BIT) {
+	if(unlikely(local_bit_num >= SX_FRAME_BIT)) {
 		local_bit_num = 0; /* overflow */
 		sx_frame_gen_cnt++; /* create new generation */
 	}
