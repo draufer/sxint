@@ -71,11 +71,11 @@ enum sx_internal_state
 	SX_WAIT_FOR_FRAME_AFTER_BASE_FRAME0,
 	SX_CONTROL_SYNC,
 } __attribute__((__packed__));
+enum sx_internal_state sx_get_state(void);
 
 void    sx_init(void);
 uint8_t sx_get_channel(uint8_t);
 void    sx_set_channel(uint8_t, uint8_t);
-enum    sx_internal_state sx_get_state(void);
 void    sx_tick(void);
 
 #endif /* SX_H_ */
