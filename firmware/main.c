@@ -72,7 +72,7 @@ int main(void)
 
             if (buf[0] == '=' && n == 3)
             {
-                sx_set_channel(buf[1] - 48, 0x1);
+                sx_set_channel(buf[1] - 48, 0xff);
             }
             if (buf[0] == '?' && n == 2)
             {

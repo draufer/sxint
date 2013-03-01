@@ -3,27 +3,18 @@ import time
 import sys
 
 def testBit(int_type, offset):
-    mask = 1 << offset
-    if (int_type & mask):
+    if (int_type & (1<<offset)):
         return 1
-    else:
-        return 0
+    return 0
 
 def printbyte(inp):
     byte = ''
-    byte += str(testBit(inp, 0))
-    byte += str(testBit(inp, 1))
-    byte += str(testBit(inp, 2))
-    byte += str(testBit(inp, 3))
-    byte += str(testBit(inp, 4))
-    byte += str(testBit(inp, 5))
-    byte += str(testBit(inp, 6))
-    byte += str(testBit(inp, 7))
+    for bit in range(0, 8):
+        byte += str(testBit(inp, bit))
     return byte
 
 ser = serial.Serial('/dev/tty.usbmodem12341',9600)
 buf = ''
-sx = [0] * (8*16+10000)
 
 printbytes = 3
 while True:
