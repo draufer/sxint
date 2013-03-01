@@ -128,3 +128,7 @@ disasm: main.elf
 
 cpp:
 	$(COMPILE) -E main.c
+
+# file deps
+usb_serial.o: usb_serial.c usb_serial.h helper.h
+sx.o: sx.c sx.h helper.h
