@@ -41,6 +41,14 @@
 #define LED_OFF     (PORTD &= ~(1<<6))
 #define CPU_PRESCALE(n) (CLKPR = 0x80, CLKPR = (n))
 
+enum serial_state
+{
+    WAIT,
+    READ,
+    WRITE_ADDRESS,
+    WRITE_VALUE
+} __attribute__((__packed__));
+
 uint8_t recv_str(char *buf, uint8_t size);
 void parse_and_execute_command(const char *buf, uint8_t num);
 
@@ -51,6 +59,9 @@ int main(void)
     char buf[32];
     uint8_t n;
     uint16_t counter = 0;
+    enum serial_state serial_command_state = WAIT;
+    int16_t r;
+    uint8_t ser_addr;
     cli();
     DDRC |= (1<<PC7);
     CPU_PRESCALE(0);
@@ -59,11 +70,42 @@ int main(void)
     sei();
     while (1) {
         sx_tick();
+        
+        /* Serial Communication State Machine */
+        r = usb_serial_getchar();
+        if (r != -1) {
+            switch(serial_command_state)
+            {
+                case WAIT:
+                    if (r == '?')
+                        serial_command_state = READ;
+                    else if (r == '=')
+                        serial_command_state = WRITE_ADDRESS;
+                    else if (r == '#')
+                        usb_serial_putchar(sx_get_state());
+                break;
+                
+                case READ:
+                    usb_serial_putchar(sx_get_channel((uint8_t)r));
+                    serial_command_state = WAIT;
+                break;
+                
+                case WRITE_ADDRESS:
+                    ser_addr = (uint8_t)r;
+                    serial_command_state = WRITE_VALUE;
+                break;
+                
+                case WRITE_VALUE:
+                    sx_set_channel(ser_addr, (uint8_t)r);
+                    serial_command_state = WAIT;
+                break;
+            }
+        }
+        
+#if 0
         n = recv_str(buf, sizeof(buf));
         if (n != 255)
         {
-            //usb_serial_putchar(sx_get_channel(buf[0]));
-            //usb_serial_putchar('\n');
             /*
             Command syntax:
             =xy     set channel x to y
@@ -93,6 +135,8 @@ int main(void)
         }
         counter++;
         */
+#endif
+
     }
 
 }
@@ -146,7 +190,7 @@ int main(void)
         }
     }
 }
-#endif
+
 
 // Receive a string from the USB serial port.  The string is stored
 // in the buffer and this function will not exceed the buffer size.
@@ -253,5 +297,5 @@ void parse_and_execute_command(const char *buf, uint8_t num)
     usb_serial_putchar(buf[0]);
     usb_serial_write_str_PGM(PSTR("\", must be ? or =\r\n"));
 }
-
+#endif
 
