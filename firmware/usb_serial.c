@@ -536,60 +536,64 @@ void usb_serial_flush_input(void)
 }
 
 /* transmit a character.  0 returned on success, -1 on error */
-int8_t usb_serial_putchar(uint8_t c)
+int8_t GCC_ATTR_OPTIMIZE("O3") usb_serial_putchar(uint8_t c)
 {
-	uint8_t timeout, intr_state;
+	uint8_t timeout;
+	bool o_flush_timer;
 
 	/* if we're not online (enumerated and configured), error */
-	if (!usb_configuration)
+	if (unlikely(!usb_configuration))
 		return -1;
-	/*
-	 * interrupts are disabled so these functions can be
-	 * used from the main program or interrupt context,
-	 * even both in the same program!
-	 */
-	intr_state = SREG;
+
+	/* reset flush timer to prevent interrupt from flushing while we write */
 	cli();
+	o_flush_timer = !!transmit_flush_timer;
+	transmit_flush_timer = 0;
+	sei();
+
 	UENUM = CDC_TX_ENDPOINT;
 	/* if we gave up due to timeout before, don't wait again */
-	if (transmit_previous_timeout) {
-		if (!(UEINTX & _BV(RWAL))) {
-			SREG = intr_state;
-			return -1;
-		}
+	if (unlikely(transmit_previous_timeout)) {
+		if (!(UEINTX & _BV(RWAL)))
+			goto OUT_ERR;
 		transmit_previous_timeout = 0;
 	}
 	/* wait for the FIFO to be ready to accept data */
 	timeout = UDFNUML + TRANSMIT_TIMEOUT;
 	while (1) {
-		// are we ready to transmit?
-		if (UEINTX & _BV(RWAL))
+		/* are we ready to transmit? */
+		if (likely(UEINTX & _BV(RWAL)))
 			break;
-		SREG = intr_state;
 		/*
 		 * have we waited too long?  This happens if the user
 		 * is not running an application that is listening
 		 */
-		if (UDFNUML == timeout) {
+		if (unlikely(UDFNUML == timeout)) {
 			transmit_previous_timeout = 1;
-			return -1;
+			goto OUT_ERR;
 		}
 		/* has the USB gone offline? */
-		if (!usb_configuration)
+		if (unlikely(!usb_configuration))
 			return -1;
 		/* get ready to try checking again */
-		intr_state = SREG;
-		cli();
-		UENUM = CDC_TX_ENDPOINT;
+		if (unlikely(o_flush_timer)) {
+			transmit_flush_timer = 1;
+			o_flush_timer = false;
+		}
 	}
 	/* actually write the byte into the FIFO */
 	UEDATX = c;
 	/* if this completed a packet, transmit it now! */
 	if (!(UEINTX & _BV(RWAL)))
 		UEINTX = 0x3A;
+
+	/* set new flush timeout */
 	transmit_flush_timer = TRANSMIT_FLUSH_TIMEOUT;
-	SREG = intr_state;
 	return 0;
+
+OUT_ERR:
+	transmit_flush_timer = 1;
+	return 1;
 }
 
 
@@ -945,16 +949,15 @@ int8_t usb_serial_write_str_PGM(PGM_P str)
  */
 void usb_serial_flush_output(void)
 {
-	uint8_t intr_state;
-
-	intr_state = SREG;
 	cli();
 	if (transmit_flush_timer) {
+		transmit_flush_timer = 0;
+		sei();
 		UENUM = CDC_TX_ENDPOINT;
 		UEINTX = 0x3A;
-		transmit_flush_timer = 0;
 	}
-	SREG = intr_state;
+	else
+		sei();
 }
 
 /*
@@ -1082,7 +1085,7 @@ static inline void usb_ack_out(void)
  * other endpoints are manipulated by the user-callable
  * functions, and the start-of-frame interrupt.
  */
-static void ep0_com_isr(void)
+static noinline void ep0_com_isr(void)
 {
 	uint8_t intbits;
 	const uint8_t *list;
@@ -1249,7 +1252,7 @@ static void ep0_com_isr(void)
 }
 
 /* if any other endpoint gives an interrupt, shut them all off! */
-static void disable_other_endpoints(void)
+static noinline void disable_other_endpoints(void)
 {
 	// TODO: shut them off
 	/* for the time beeing, do what old code does, stall EP0 */
