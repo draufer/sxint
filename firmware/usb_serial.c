@@ -62,6 +62,7 @@
 #include <avr/interrupt.h>
 
 #include "usb_serial.h"
+#include "helper.h"
 
 /**************************************************************************
  *
@@ -1013,13 +1014,24 @@ int8_t usb_serial_set_control(uint8_t signals)
  * USB Device Interrupt - handle all device-level events
  * the transmit buffer flushing is triggered by the start of frame
  */
-ISR(USB_GEN_vect)
+ISR(USB_GEN_vect, GCC_ATTR_OPTIMIZE("O3"))
 {
-	uint8_t intbits, t;
+	uint8_t intbits;
 
 	intbits = UDINT;
 	UDINT = 0;
-	if (intbits & _BV(EORSTI)) {
+	if (unlikely(intbits & _BV(EORSTI)))
+	{
+		/*
+		 * This is racy with the other routines, even if they switch off
+		 * interrupts.
+		 * Wenn the USB-Controller is "suddenly" in reset state (or is
+		 * otherwise incapacitated), just because the interrupt is not
+		 * delivered (yet), does not mean we can still use the controller.
+		 * So even with interrupts off, if the USB controller goes away
+		 * in the middle of the function, we can do nothing about it.
+		 */
+		uint8_t o_uenum = UENUM;
 		UENUM = 0;
 		UECONX = 1;
 		UECFG0X = EP_TYPE_CONTROL;
@@ -1027,15 +1039,18 @@ ISR(USB_GEN_vect)
 		UEIENX = _BV(RXSTPE);
 		usb_configuration = 0;
 		sx_cdc_line_rtsdtr = 0;
+		UENUM = o_uenum;
 	}
 	if (intbits & (1<<SOFI)) {
-		if (usb_configuration) {
-			t = transmit_flush_timer;
-			if (t) {
+		if (likely(usb_configuration)) {
+			uint8_t t = transmit_flush_timer;
+			if (unlikely(t)) {
 				transmit_flush_timer = --t;
 				if (!t) {
+					uint8_t o_uenum = UENUM;
 					UENUM = CDC_TX_ENDPOINT;
 					UEINTX = 0x3A;
+					UENUM = o_uenum;
 				}
 			}
 		}
@@ -1062,13 +1077,12 @@ static inline void usb_ack_out(void)
 }
 
 
-
 /*
  * USB Endpoint Interrupt - endpoint 0 is handled here.  The
  * other endpoints are manipulated by the user-callable
  * functions, and the start-of-frame interrupt.
  */
-ISR(USB_COM_vect)
+static void ep0_com_isr(void)
 {
 	uint8_t intbits;
 	const uint8_t *list;
@@ -1232,6 +1246,33 @@ ISR(USB_COM_vect)
 #endif
 	}
 	UECONX = _BV(STALLRQ) | _BV(EPEN);  /* stall */
+}
+
+/* if any other endpoint gives an interrupt, shut them all off! */
+static void disable_other_endpoints(void)
+{
+	// TODO: shut them off
+	/* for the time beeing, do what old code does, stall EP0 */
+	UENUM = 0;
+	UECONX = _BV(STALLRQ) | _BV(EPEN);  /* stall */
+}
+
+ISR(USB_COM_vect)
+{
+	uint8_t o_uenum, ep_source;
+
+	/* get original UENUM value */
+	o_uenum = UENUM;
+	/* get interrupt source mask */
+	ep_source = UEINT;
+
+	if(ep_source & _BV(EPINT_D0))
+		ep0_com_isr();
+	if(ep_source & ~_BV(EPINT_D0))
+		disable_other_endpoints();
+
+	/* set UENUM to original value */
+	UENUM = o_uenum;
 }
 
 /* EOF */
