@@ -576,7 +576,7 @@ static __attribute__((__signal__, __used__)) GCC_ATTR_OPTIMIZE("O3") void edge_f
 	uint8_t bit_mask, l_dir;
 
 	/* toggle led for debug */
-//	PORTC ^= (1<<PC7);
+	//PORTC ^= (1<<PC7);
 
 	/* precalc offsets */
 	byte_num = local_bit_num / UINT8_T_BIT;
@@ -598,11 +598,17 @@ static __attribute__((__signal__, __used__)) GCC_ATTR_OPTIMIZE("O3") void edge_f
 			PORTD |= _BV(SX_WRITE);
 		else
 			PORTD &= ~_BV(SX_WRITE);
+        
+        /* Enable the LED for triggering */
+        PORTC |= (1<<PC7);
 	}
 	else
 	{
 		DDRD &= ~_BV(SX_WRITE);
 		PORTD &= ~_BV(SX_WRITE);
+
+        /* Disable LED */
+        PORTC &= ~(1<<PC7);
 	}
 }
 
@@ -621,7 +627,7 @@ static __attribute__((__signal__, __used__)) GCC_ATTR_OPTIMIZE("O3") void edge_r
 	/* compiletime_assert(0 == SX_FRAME_BIT % UINT8_T_BIT) */
 
 	/* toggle led for debug */
-	PORTC ^= _BV(PC7);
+	//PORTC ^= _BV(PC7);
 
 	/* shift current byte down */
 	lc_byte = c_byte >> 1;
