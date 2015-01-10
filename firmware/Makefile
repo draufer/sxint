@@ -49,6 +49,11 @@ OBJECTS	   = main.o usb_serial.o sx.o
 FUSES	   = #-U hfuse:w:0xd9:m -U lfuse:w:0x24:m
 #AVRDUDE_BIN = ./flash.py
 AVRDUDE_BIN = avrdude
+CFLAGS = 
+CFLAGS += -D CMDBUF=1
+
+# Causes the program to break!
+#CFLAGS += -D REVOKE_SYNC_ON_USB_INTERRUPT=1
 
 # ATMega8 fuse bits used above (fuse bits for other devices are different!):
 # Example for 8 MHz internal oscillator
@@ -76,7 +81,7 @@ AVRDUDE_BIN = avrdude
 # Tune the lines below only if you know what you are doing:
 
 AVRDUDE = $(AVRDUDE_BIN) $(PROGRAMMER) -p $(DEVICE)
-COMPILE = avr-gcc -Wall -Os -DF_CPU=$(CLOCK) -mmcu=$(DEVICE)
+COMPILE = avr-gcc -Wall -Os -DF_CPU=$(CLOCK) -mmcu=$(DEVICE) $(CFLAGS)
 
 # symbolic targets:
 all:	main.hex

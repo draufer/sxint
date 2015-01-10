@@ -71,11 +71,19 @@ enum sx_internal_state
 	SX_WAIT_FOR_FRAME_AFTER_BASE_FRAME0,
 	SX_CONTROL_SYNC,
 } __attribute__((__packed__));
+
 enum sx_internal_state sx_get_state(void);
+
+#ifdef REVOKE_SYNC_ON_USB_INTERRUPT
+void sx_revoke_sync(void);
+#endif
 
 void    sx_init(void);
 uint8_t sx_get_channel(uint8_t);
 void    sx_set_channel(uint8_t, uint8_t);
 void    sx_tick(void);
+
+uint8_t* sx_get_data_pointer();
+uint16_t sx_get_data_size();
 
 #endif /* SX_H_ */

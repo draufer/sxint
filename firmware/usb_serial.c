@@ -64,6 +64,10 @@
 #include "usb_serial.h"
 #include "helper.h"
 
+#ifdef REVOKE_SYNC_ON_USB_INTERRUPT
+#include "sx.h"
+#endif
+
 /**************************************************************************
  *
  *  Configurable Options
@@ -1047,6 +1051,9 @@ ISR(USB_GEN_vect, GCC_ATTR_OPTIMIZE("O3"))
 			}
 		}
 	}
+#ifdef REVOKE_SYNC_ON_USB_INTERRUPT
+	sx_revoke_sync();
+#endif
 }
 
 

@@ -41,29 +41,71 @@
 #define LED_OFF     (PORTD &= ~(1<<6))
 #define CPU_PRESCALE(n) (CLKPR = 0x80, CLKPR = (n))
 
+#ifdef CMDBUF
+#define CMDBUF_SIZE 128
+#endif
+
 enum serial_state
 {
     WAIT,
     READ,
     WRITE_ADDRESS,
-    WRITE_VALUE
+    WRITE_VALUE,
+//	READ_ALL
 } __attribute__((__packed__));
 
 uint8_t recv_str(char *buf, uint8_t size);
 void parse_and_execute_command(const char *buf, uint8_t num);
 
-#if 1
+#ifdef CMDBUF
+
+/* Create a command buffer */
+int cmdbuf_start = 0; /* Start position in cmdbuf ring buffer */
+int cmdbuf_length = 0; /* length of cmdbuf data */
+char cmdbuf[CMDBUF_SIZE][3];
+
+// ringbuffer for command queueing
+
+int cmdbuf_push(uint8_t cmd, uint8_t value1, uint8_t value2) {
+	if (cmdbuf_length < (CMDBUF_SIZE)) {
+		int pos = (cmdbuf_start + cmdbuf_length) % CMDBUF_SIZE;
+		cmdbuf[pos][0] = cmd;
+		cmdbuf[pos][1] = value1;
+		cmdbuf[pos][2] = value2;
+		cmdbuf_length += 1;
+		return 0;
+	}
+	return -1;
+}
+
+int cmdbuf_pop(uint8_t* cmd, uint8_t* value1, uint8_t* value2) {
+	if (cmdbuf_length > 0) {
+		*cmd = cmdbuf[cmdbuf_start][0];
+		*value1 = cmdbuf[cmdbuf_start][1];
+		*value2 = cmdbuf[cmdbuf_start][2];
+		cmdbuf_start = (cmdbuf_start + 1) % CMDBUF_SIZE;
+		cmdbuf_length -= 1;
+		return 0;
+	}
+	return -1;
+}
+#endif
+
+
 // SX Base Function (Read) Implementation Test
 int main(void)
 {
-    char buf[32];
-    uint8_t n;
-    uint16_t counter = 0;
+    //char buf[32];
+    //uint8_t n;
+    //uint16_t counter = 0;
     enum serial_state serial_command_state = WAIT;
     int16_t r;
-    uint8_t ser_addr;
+    uint8_t ser_addr = 0;
+#ifdef CMDBUF
+	uint8_t cmd, value1, value2;
+#endif
     cli();
-    DDRC |= (1<<PC7);
+    DDRC |= _BV(PC7)|_BV(PC6);
     CPU_PRESCALE(0);
     sx_init();
     usb_init();
@@ -74,6 +116,8 @@ int main(void)
         /* Serial Communication State Machine */
         r = usb_serial_getchar();
         if (r != -1) {
+			
+#ifdef CMDBUF
             switch(serial_command_state)
             {
                 case WAIT:
@@ -81,14 +125,59 @@ int main(void)
                         serial_command_state = READ;
                     else if (r == '=')
                         serial_command_state = WRITE_ADDRESS;
-                    else if (r == '#')
-                        usb_serial_putchar(sx_get_state());
+                    else if (r == '#') {
+						cmdbuf_push(r, 0, 0);
+					}
+					//else if (r == '*')
+					//	serial_command_state = READ_ALL;
                 break;
                 
                 case READ:
-                    usb_serial_putchar(sx_get_channel((uint8_t)r));
+					cmdbuf_push('?', r, 0);
                     serial_command_state = WAIT;
                 break;
+ 
+                //case READ_ALL:
+                //	usb_serial_write(sx_get_data_pointer() ,/*sx_get_data_size()*/ 4);
+				//	usb_serial_putchar('\n');
+				//	serial_command_state = WAIT;
+                //break;
+                
+                case WRITE_ADDRESS:
+                    ser_addr = (uint8_t)r;
+                    serial_command_state = WRITE_VALUE;
+                break;
+                
+                case WRITE_VALUE:
+					cmdbuf_push('=', ser_addr, r);
+                    serial_command_state = WAIT;
+                break;
+            }
+#else					
+            switch(serial_command_state)
+            {
+                case WAIT:
+                    if (r == '?')
+                        serial_command_state = READ;
+                    else if (r == '=')
+                        serial_command_state = WRITE_ADDRESS;
+                    else if (r == '#') {
+					    usb_serial_putchar(sx_get_state());
+					}
+					//else if (r == '*')
+					//	serial_command_state = READ_ALL;
+                break;
+                
+                case READ:
+					usb_serial_putchar(sx_get_channel((uint8_t)r));
+                    serial_command_state = WAIT;
+                break;
+ 
+                //case READ_ALL:
+                //	usb_serial_write(sx_get_data_pointer() ,/*sx_get_data_size()*/ 4);
+				//	usb_serial_putchar('\n');
+				//	serial_command_state = WAIT;
+                //break;
                 
                 case WRITE_ADDRESS:
                     ser_addr = (uint8_t)r;
@@ -100,202 +189,26 @@ int main(void)
                     serial_command_state = WAIT;
                 break;
             }
+#endif			
+			
         }
-        
-#if 0
-        n = recv_str(buf, sizeof(buf));
-        if (n != 255)
-        {
-            /*
-            Command syntax:
-            =xy     set channel x to y
-            ?x      query channel x
-            */
-
-            if (buf[0] == '=' && n == 3)
-            {
-                sx_set_channel(buf[1] - 48, 0b10101010);
-            }
-            if (buf[0] == '?' && n == 2)
-            {
-                usb_serial_putchar(sx_get_state());
-                usb_serial_putchar(buf[1] - 48);
-                usb_serial_putchar(sx_get_channel(buf[1] - 48));
-                usb_serial_putchar('\n');
-            }
-        }
-        
-        //PORTC |= (1<<PC7);
-        /*
-        if (counter > 50000) {
-            usb_serial_putchar(sx_get_state());
-            usb_serial_putchar(sx_get_channel(1));
-            usb_serial_putchar('\n');
-            counter = 0;
-        }
-        counter++;
-        */
+#ifdef CMDBUF
+		/* TODO: 6: This is not nice, bad to read. (SX_CONTROL_SYNC == 6)... */
+		if ((cmdbuf_length > 0) && (sx_get_state() == 6)) {
+			cmdbuf_pop(&cmd, &value1, &value2);
+			switch(cmd){
+				case '?':
+					usb_serial_putchar(sx_get_channel(value1));
+				break;
+				case '=':
+					sx_set_channel(value1, value2);
+				break;				
+				case '#':
+					usb_serial_putchar(sx_get_state());
+				break;
+			}
+		}
 #endif
-
     }
 
 }
-
-#else
-
-// Basic command interpreter for controlling port pins
-int main(void)
-{
-    char buf[32];
-    uint8_t n;
-
-    // set for 16 MHz clock, and turn on the LED
-    CPU_PRESCALE(0);
-    LED_CONFIG;
-    LED_ON;
-
-    // initialize the USB, and then wait for the host
-    // to set configuration.  If the Teensy is powered
-    // without a PC connected to the USB port, this 
-    // will wait forever.
-    usb_init();
-    while (!usb_configured()) /* wait */ ;
-    _delay_ms(1000);
-
-    while (1) {
-        // wait for the user to run their terminal emulator program
-        // which sets DTR to indicate it is ready to receive.
-        while (!(usb_serial_get_control() & USB_SERIAL_DTR)) /* wait */ ;
-
-        // discard anything that was received prior.  Sometimes the
-        // operating system or other software will send a modem
-        // "AT command", which can still be buffered.
-        usb_serial_flush_input();
-
-        // print a nice welcome message
-        usb_serial_write_str_PGM(PSTR("\r\nTeensy USB Serial Example, "
-                    "Simple Pin Control Shell\r\n\r\n"
-                    "Example Commands\r\n"
-                    "  B0?   Read Port B, pin 0\r\n"
-                    "  C2=0  Write Port C, pin 1 LOW\r\n"
-                    "  D6=1  Write Port D, pin 6 HIGH  (D6 is LED pin)\r\n\r\n"));
-
-        // and then listen for commands and process them
-        while (1) {
-            usb_serial_write_str_PGM(PSTR("> "));
-            n = recv_str(buf, sizeof(buf));
-            if (n == 255) break;
-            usb_serial_write_str_PGM(PSTR("\r\n"));
-            parse_and_execute_command(buf, n);
-        }
-    }
-}
-
-
-// Receive a string from the USB serial port.  The string is stored
-// in the buffer and this function will not exceed the buffer size.
-// A carriage return or newline completes the string, and is not
-// stored into the buffer.
-// The return value is the number of characters received, or 255 if
-// the virtual serial connection was closed while waiting.
-//
-uint8_t recv_str(char *buf, uint8_t size)
-{
-    int16_t r;
-    uint8_t count=0;
-
-    while (count < size) {
-        r = usb_serial_getchar();
-        if (r != -1) {
-            if (r == '\r' || r == '\n') return count;
-            if (r >= ' ' && r <= '~') {
-                *buf++ = r;
-                //usb_serial_putchar(r);
-                count++;
-            }
-        } else {
-            return 255;
-        }    
-        /*
-        } else {
-            if (!usb_configured() ||
-                    !(usb_serial_get_control() & USB_SERIAL_DTR)
-            ) {
-                // user no longer connected
-                return 255;
-            }
-            // just a normal timeout, keep waiting
-        }
-        */
-    }
-    return count;
-}
-
-// parse a user command and execute it, or print an error message
-//
-void parse_and_execute_command(const char *buf, uint8_t num)
-{
-    uint8_t port, pin, val;
-
-    if (num < 3) {
-        usb_serial_write_str_PGM(PSTR("unrecognized format, 3 chars min req'd\r\n"));
-        return;
-    }
-    // first character is the port letter
-    if (buf[0] >= 'A' && buf[0] <= 'F') {
-        port = buf[0] - 'A';
-    } else if (buf[0] >= 'a' && buf[0] <= 'f') {
-        port = buf[0] - 'a';
-    } else {
-        usb_serial_write_str_PGM(PSTR("Unknown port \""));
-        usb_serial_putchar(buf[0]);
-        usb_serial_write_str_PGM(PSTR("\", must be A - F\r\n"));
-        return;
-    }
-    // second character is the pin number
-    if (buf[1] >= '0' && buf[1] <= '7') {
-        pin = buf[1] - '0';
-    } else {
-        usb_serial_write_str_PGM(PSTR("Unknown pin \""));
-        usb_serial_putchar(buf[0]);
-        usb_serial_write_str_PGM(PSTR("\", must be 0 to 7\r\n"));
-        return;
-    }
-    // if the third character is a question mark, read the pin
-    if (buf[2] == '?') {
-        // make the pin an input
-        *(uint8_t *)(0x21 + port * 3) &= ~(1 << pin);
-        // read the pin
-        val = *(uint8_t *)(0x20 + port * 3) & (1 << pin);
-        usb_serial_putchar(val ? '1' : '0');
-        usb_serial_write_str_PGM(PSTR("\r\n"));
-        return;
-    }
-    // if the third character is an equals sign, write the pin
-    if (num >= 4 && buf[2] == '=') {
-        if (buf[3] == '0') {
-            // make the pin an output
-            *(uint8_t *)(0x21 + port * 3) |= (1 << pin);
-            // drive it low
-            *(uint8_t *)(0x22 + port * 3) &= ~(1 << pin);
-            return;
-        } else if (buf[3] == '1') {
-            // make the pin an output
-            *(uint8_t *)(0x21 + port * 3) |= (1 << pin);
-            // drive it high
-            *(uint8_t *)(0x22 + port * 3) |= (1 << pin);
-            return;
-        } else {
-            usb_serial_write_str_PGM(PSTR("Unknown value \""));
-            usb_serial_putchar(buf[3]);
-            usb_serial_write_str_PGM(PSTR("\", must be 0 or 1\r\n"));
-            return;
-        }
-    }
-    // otherwise, error message
-    usb_serial_write_str_PGM(PSTR("Unknown command \""));
-    usb_serial_putchar(buf[0]);
-    usb_serial_write_str_PGM(PSTR("\", must be ? or =\r\n"));
-}
-#endif
-

@@ -30,9 +30,61 @@
 
 
 /*
-    Obere Reihe von links nach rechts: Px1, Px2, Sx-T1(Daten von der Zentrale)
-    Mittlere Reihe von links nach rechts: Px-EN, GND, Sx-T0(Takt)
-    Untere Reihe von links nach rechts: Sx-D(Zur Zentrale), +B
+	Basic SX Setup (for maerklin Z gauge):
+
+	Trix Control Handy + Booster/Control Station
+	Arduino Micro attached (Mini DIN Selectrix male plug in Trix Control
+	Station) on "Steckboard" to the Selectrix bus.
+
+	The Trix components are powered with 9V.
+
+	Mini DIN Cable pin description:
+	    [Px1]  [Px2]  [Sx-T1]
+
+	[Px-EN]  (Gap)  [GND]  [Sx-T0]
+
+	        [Sx-D]  [+B]
+
+	Legend:
+	Px1: Power BUS1 (not needed here) [green cable]
+	Px2: Power BUS2 (not needed here) [?]
+	Sx-T1: Data coming from central station. [grey cable]
+		SX_DATA == PD4 == Digital Pin 4
+	Px-EN: unknown. (not needed here) [?]
+	Gap: A gap in the plug. [no cable]
+	GND: Ground. Needs to be connected with the Arduino GND pin. [red cable]
+	Sx-T0: Clock coming from central station. [pink cable]
+		SX_CLK == PD0 == Digital Pin 3. Important: It ust be this PIN! (INT0)
+	Sx-D: Data from the Arduino to the central Station. [blue cable]
+		SX_WRITE == PD1 == Digital Pin 2. (Maybe there has to be a pullup resistor active?)
+	+B: Beware! 20 Volts. Do not use! [yellow]
+
+	External sources:
+	- http://www.mttm.de/Internals.htm
+
+	Selectrix Data Signal Layout
+
+	channel: 12 bits (either data channel or sync channel)
+	base frame: 8 channels (1 sync channel + 7 data channels)
+	frame: 16 base frames
+
+	Channel bit layout:
+
+	         Time 0 ----------------------> t
+	sync channel:  0  0  0  1  X  1 B3 B2  1 B1 B0  1 (X = Power on rails 0 or 1) B0(lsb) - B3(msb) = sync channel index 0-15
+	data channel: B7 B6  1 B5 B4  1 B3 B2  1 B1 B0  1 (B0 - B7 = Payload)
+
+	Data channel position in frame formula:
+
+	computation example:
+	channel      = 1 (lokomotive 01)           1
+	t_frame      = channel / 16                0
+	t_base       = channel % 16                1
+	data_channel = 7 - t_frame                 7
+	base_frame   = 15 - t_base                 14
+	bit_addr     = base_frame * 8 * 12 + data_channel * 12 = 1428
+	
+
 */
 
 #include <limits.h>
@@ -70,17 +122,26 @@ typedef uint32_t sx_wild_channel;
 /****************** vars ******************************/
 
 /* raw bit arrays */
+
+/* selectrix data from central station */
 static uint8_t sx_raw_bits_in[DIV_ROUNDUP(SX_FRAME_BIT, UINT8_T_BIT) + ARR_EXTRA_SP]; /* use more bytes to help with overread and overwrite */
+
+/* data direction bit mask: 1 means to write our data to the selectrix bus (SX-D) */
 static uint8_t sx_raw_bits_out_dir[DIV_ROUNDUP(SX_FRAME_BIT, UINT8_T_BIT) + ARR_EXTRA_SP];
+
+/* outgoing data, to be written to SX-D */
 static uint8_t sx_raw_bits_out_data[DIV_ROUNDUP(SX_FRAME_BIT, UINT8_T_BIT) + ARR_EXTRA_SP];
+
 /* interrupt position */
 volatile uint16_t sx_nxt_bit_num;
 volatile uint8_t sx_frame_gen_cnt;
+
 /* frame wait */
 static struct {
 	uint16_t bit;
 	uint8_t gen;
 } sx_frame_wait;
+
 /* internal state */
 static enum sx_internal_state internal_state;
 
@@ -112,8 +173,6 @@ void sx_init()
 	sx_frame_gen_cnt = 0;
 	internal_state = SX_SEARCH_SYNC;
 
-	//PORTC |= _BV(PC7);
-
 	/* Set interrupt control register */
 /*************/
 	/*
@@ -129,9 +188,10 @@ void sx_init()
 	 * 2) on rising edge data will be read
 	 *   -> every one and the main Station sample the data
 	 *
-	 * This looks to be the rules du SX
+	 * This looks to be the rules of SX
 	 */
 /*************/
+	
 	/* rising and falling edge creates Interrupt */
 	EICRA  = (EICRA & ~(_BV(ISC00)|_BV(ISC01))) | _BV(ISC00);
 	/* activate external interupt */
@@ -145,24 +205,33 @@ enum sx_internal_state sx_get_state(void)
 	return internal_state;
 }
 
+#ifdef REVOKE_SYNC_ON_USB_INTERRUPT
+void sx_revoke_sync(void)
+{
+	internal_state = SX_SEARCH_SYNC;
+}
+#endif
+
+/* sx_get_startbit (uint8_t channel)
+ *
+ * compute the first bit (absolute position) of data channel "channel"
+ * to fetch the data from sx_raw_bits_in[]
+ */
 static noinline uint16_t GCC_ATTR_OPTIMIZE("O3")  sx_get_startbit(uint8_t channel)
 {
 	/* naming:
 	 *
 	 * Number of base frames: SX_BASE_FRAME_CNT (16)
-	 * Number of info channels per base frame: SX_BASE_FRAME_INFO_CNT (7)
-	 * Number of bits in an SX byte: SX_BITCOUNT (12)
+	 * Number of data channels per base frame: SX_BASE_FRAME_INFO_CNT (7)
+	 * Number of bits in an SX byte (data channel): SX_BITCOUNT (12)
 	 *
-	 * formula in arduino code: _channel = (15-_baseAdr) + ((6-_dataFrameCount)<<4);
-	 * example bitpos lok01: 1428
-	 *
-	 * computation:
-	 * channel  = 1 (lok01)                   1
-	 * tFrame   = channel / 16;               0
-	 * tBase    = channel % 16;               1
-	 * Frame    = 7 - tFrame;                 7
-	 * Base     = 15 - tBase;                 14
-	 * bit_addr = Base * 8 * 12 + frame * 12; 1428
+	 * computation example:
+	 * channel      = 1 (lokomotive 01)           1
+	 * t_frame      = channel / 16                0
+	 * t_base       = channel % 16                1
+	 * data_channel = 7 - t_frame                 7
+	 * base_frame   = 15 - t_base                 14
+	 * bit_addr     = base_frame * 8 * 12 + data_channel * 12 = 1428
 	 */
 	return (((SX_BASE_FRAME_CNT - 1) - (channel % SX_BASE_FRAME_CNT))) * 8 * SX_BITCOUNT
 	       + (SX_BASE_FRAME_INFO_CNT - (channel / SX_BASE_FRAME_CNT)) * SX_BITCOUNT;
@@ -182,7 +251,7 @@ static uint16_t sx_data_expand(uint8_t data)
 }
 
 /* extract data bits from wire bit pattern */
-static uint8_t sx_data_colapse(uint16_t wdata)
+static uint8_t sx_data_collapse(uint16_t wdata)
 {
 	uint8_t res;
 #ifdef I_WANT_CLEAN
@@ -223,7 +292,7 @@ uint8_t GCC_ATTR_OPTIMIZE("O3") sx_get_channel(uint8_t channel)
 	sx_wild_channel bytebuffer; /* temporary buffer for read in data */
 	uint16_t bitpos;            /* the postion of the first bit in the buffer */
 	uint8_t bit_offset;         /* the offset from the beginning of the first byte it is stored in */
-	uint8_t start_byte;         /* the first byte that contains the payload */
+	uint8_t start_byte;         /* the first byte that contains the payload */		
 
 	/* get channel bit position */
 	bitpos = sx_get_startbit(channel);
@@ -243,7 +312,7 @@ uint8_t GCC_ATTR_OPTIMIZE("O3") sx_get_channel(uint8_t channel)
 	bytebuffer = *((sx_wild_channel *)(sx_raw_bits_in + start_byte));
 #endif
 	/* shift it down on a byte boundery, extract the data bits from the padding */
-	return sx_data_colapse(bytebuffer >> bit_offset);
+	return sx_data_collapse(bytebuffer >> bit_offset);
 }
 
 void GCC_ATTR_OPTIMIZE("O3") sx_set_channel(uint8_t channel, uint8_t data)
@@ -326,8 +395,21 @@ void GCC_ATTR_OPTIMIZE("O3") sx_set_channel(uint8_t channel, uint8_t data)
 #endif
 }
 
+/*
+uint8_t* GCC_ATTR_OPTIMIZE("O3") sx_get_data_pointer() {
+	
+	return sx_raw_bits_in;
+}
+
+uint16_t GCC_ATTR_OPTIMIZE("O3") sx_get_data_size() {
+	
+	return (DIV_ROUNDUP(SX_FRAME_BIT, UINT8_T_BIT) + ARR_EXTRA_SP);
+}
+*/
+
 /******************** helper ****************************/
 
+#if 0
 /* did a full base frame arrived in the mean time? */
 static noinline bool sx_wait_base_frame(void)
 {
@@ -345,6 +427,7 @@ static noinline bool sx_wait_base_frame(void)
 	}
 	return false;
 }
+#endif
 
 /* init wait for full frame */
 static noinline void sx_wait_frame_init(void)
@@ -377,7 +460,7 @@ static noinline bool sx_wait_frame(void)
 /************************ sx state functions ****************************/
 /*
  * For for a sync channel at the start of the buffer, move offset to
- * align snc frame in buffer
+ * align sync frame in buffer
  *
  * after this function has done it's thing, better wait for a full frame
  */
@@ -404,7 +487,7 @@ static noinline bool sx_search_sync(void)
 				sx_nxt_bit_num = local_bit_num - i;
 				ret_val = true;
 			} else {
-				/* simply retry wenn bit number has moved on? */
+				/* simply retry when bit number has moved on? */
 			}
 			sei();
 			break;
@@ -459,7 +542,8 @@ static noinline bool sx_search_base_frame0(void)
 }
 
 /*
- * Check if buffer is stil synced
+ * Check if buffer is still in sync
+ * It only checks the first 12 bits, no guarantee, that all data is in sync!
  */
 static noinline bool sx_control_sync(void)
 {
@@ -508,8 +592,10 @@ void sx_tick(void)
 			internal_state = SX_CONTROL_SYNC;
 		break;
 	case SX_CONTROL_SYNC:
+		PORTC &= ~_BV(PC6);
 		if(!sx_control_sync()) {
 			internal_state = SX_SEARCH_SYNC;
+			PORTC |= _BV(PC6);			
 			/* TODO: reset write state on reset */
 		}
 		break;
@@ -540,6 +626,7 @@ static __attribute__((__signal__, __used__)) GCC_ATTR_OPTIMIZE("O3") void edge_f
 	/* precalc offsets */
 	byte_num = local_bit_num / UINT8_T_BIT;
 	bit_mask = pgm_read_byte(bit_masks + (local_bit_num % UINT8_T_BIT));
+	
 	/* get direction */
 	l_dir = sx_raw_bits_out_dir[byte_num];
 

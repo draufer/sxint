@@ -14,11 +14,18 @@ class SX(object):
     def get_channel(self, channel):
         self.ser.write('?' + chr(channel))
         return ord(self.ser.read(1))
+
+    def get_raw(self):
+        self.ser.write('*')
+        return self.ser.readline();
         
     def get_state(self):
         self.ser.write('#')
         return ord(self.ser.read(1))
-        
+
+    def set_noop(self):
+        self.ser.write(' ') # noop
+                
         
 if __name__ == '__main__':
     def printUsage(msg=''):
@@ -34,8 +41,10 @@ if __name__ == '__main__':
     OP_READ = 1
     OP_WRITE = 2
     OP_MONITOR = 3
+    OP_READ_ALL = 4
+    OP_NOOP = 5
     
-    (opts, args) = getopt.gnu_getopt(sys.argv, 'd:r:w:m:', [])
+    (opts, args) = getopt.gnu_getopt(sys.argv, 'd:r:w:m:san', [])
     opts = dict(opts)
     
     operation = 0
@@ -59,12 +68,26 @@ if __name__ == '__main__':
     elif '-r' in opts.keys():
         channel = parseByteValue(opts['-r'])
         operation = OP_READ
+    elif '-s' in opts.keys():
+        operation = OP_MONITOR
+    elif '-a' in opts.keys():
+        operation = OP_READ_ALL
+    elif '-n' in opts.keys():
+        operation = OP_NOOP
     
     ser = serial.Serial(ser_dev, 9600)
+    #ser = serial.Serial(ser_dev, 115200)
     sx = SX(ser)
     
     if operation == OP_READ:
         print sx.get_channel(channel)
     elif operation == OP_WRITE:
         sx.set_channel(channel, value)
+    elif operation == OP_MONITOR:
+        print 'State: ', sx.get_state()
+    elif operation == OP_READ_ALL:
+        print 'All Data: ', sx.get_raw()
+    elif operation == OP_NOOP:
+        sx.set_noop()
+        print 'Executed noop'
     
