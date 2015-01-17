@@ -10,6 +10,7 @@ class SX(object):
 
     def set_channel(self, channel, value):
         self.ser.write('=' + chr(channel) + chr(value))
+        return self.ser.read(1)
 
     def get_channel(self, channel):
         self.ser.write('?' + chr(channel))
@@ -82,7 +83,9 @@ if __name__ == '__main__':
     if operation == OP_READ:
         print sx.get_channel(channel)
     elif operation == OP_WRITE:
-        sx.set_channel(channel, value)
+        val = sx.set_channel(channel, value)
+        if (val != '!'):
+            printf('Failure')
     elif operation == OP_MONITOR:
         print 'State: ', sx.get_state()
     elif operation == OP_READ_ALL:

@@ -26,6 +26,10 @@ extern volatile uint8_t sx_cdc_line_rtsdtr;
 #define usb_serial_get_control() sx_cdc_line_rtsdtr /* get the RTS and DTR signal state */
 int8_t usb_serial_set_control(uint8_t signals); /* set DSR, DCD, RI, etc */
 
+/* draufer */
+void usb_enable_interrupts(void);
+void usb_disable_interrupts(void);
+
 /* constants corresponding to the various serial parameters */
 #define USB_SERIAL_DTR              0x01
 #define USB_SERIAL_RTS              0x02
@@ -52,4 +56,6 @@ int8_t usb_serial_set_control(uint8_t signals); /* set DSR, DCD, RI, etc */
  */
 #define usb_debug_putchar(c)
 #define usb_debug_flush_output()
+
+
 #endif

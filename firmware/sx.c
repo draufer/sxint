@@ -140,7 +140,9 @@ volatile uint8_t sx_frame_gen_cnt;
 static struct {
 	uint16_t bit;
 	uint8_t gen;
-} sx_frame_wait;
+} sx_frame_wait, transmission_wait;
+	
+
 
 /* internal state */
 static enum sx_internal_state internal_state;
@@ -196,6 +198,11 @@ void sx_init()
 	EICRA  = (EICRA & ~(_BV(ISC00)|_BV(ISC01))) | _BV(ISC00);
 	/* activate external interupt */
 	EIMSK |= _BV(INT0);
+	
+	/* debug led lighting means: no sync */
+	PORTC |= _BV(PC6);
+	/* debug led signaling sx int0 */
+	//PORTD |= _BV(PD7);
 }
 
 /*************************** functions ********************/
@@ -205,12 +212,14 @@ enum sx_internal_state sx_get_state(void)
 	return internal_state;
 }
 
-#ifdef REVOKE_SYNC_ON_USB_INTERRUPT
+//#ifdef REVOKE_SYNC_ON_USB_INTERRUPT
 void sx_revoke_sync(void)
 {
+	sx_nxt_bit_num = 0;
+	sx_frame_gen_cnt = 0;
 	internal_state = SX_SEARCH_SYNC;
 }
-#endif
+//#endif
 
 /* sx_get_startbit (uint8_t channel)
  *
@@ -429,6 +438,30 @@ static noinline bool sx_wait_base_frame(void)
 }
 #endif
 
+void wait_for_full_transmission_init(void) {
+	cli();
+	transmission_wait.bit = sx_nxt_bit_num;
+	transmission_wait.gen = sx_frame_gen_cnt;
+	sei();
+}
+
+bool wait_for_full_transmission(void) {
+	uint8_t diff;
+	uint16_t bdiff;
+	
+	/* this uses a benign race, to prevent switching interrupts off */
+	diff = sx_frame_gen_cnt - transmission_wait.gen;
+	if(0 == diff)
+		return false;
+	if(diff > 2) /* TODO: buggy on generation roll over 0xff->0 */
+		return true;
+
+	bdiff = (sx_nxt_bit_num + SX_FRAME_BIT) - transmission_wait.bit;
+	if(bdiff > SX_FRAME_BIT)
+		return true;
+	return false;
+}
+
 /* init wait for full frame */
 static noinline void sx_wait_frame_init(void)
 {
@@ -510,7 +543,7 @@ static noinline bool sx_search_base_frame0(void)
 {
 	unsigned off;
 
-	/* itterate over all sync channel */
+	/* iterate over all sync channel */
 	for(off = 0; off < SX_FRAME_BYTES; off += SX_BASE_FRAME_BYTES)
 	{
 		uint16_t in;
@@ -563,11 +596,12 @@ static noinline bool sx_control_sync(void)
  * Tick function
  * call every time through main to update sx state
  */
-void sx_tick(void)
+enum sx_internal_state sx_tick(void)
 {
 	switch(internal_state)
 	{
 	case SX_SEARCH_SYNC:
+		PORTC |= _BV(PC6);
 		if(sx_search_sync())
 			internal_state = SX_WAIT_FOR_FRAME_AFTER_SYNC_INIT;
 		else
@@ -595,11 +629,20 @@ void sx_tick(void)
 		PORTC &= ~_BV(PC6);
 		if(!sx_control_sync()) {
 			internal_state = SX_SEARCH_SYNC;
-			PORTC |= _BV(PC6);			
+			//PORTC |= _BV(PC6);			
 			/* TODO: reset write state on reset */
 		}
 		break;
 	}
+	return internal_state;
+}
+
+/* draufer */
+void sx_enable_interrupts (void) {
+		EIMSK |= _BV(INT0);
+}
+void sx_disable_interrupts (void) {
+		EIMSK &= ~_BV(INT0);
 }
 
 /*********************** interrupts **********************/
@@ -655,6 +698,10 @@ static __attribute__((__signal__, __used__)) GCC_ATTR_OPTIMIZE("O3") void edge_f
 
         /* Disable LED */
         PORTC &= ~(1<<PC7);
+		
+		/* debug led off */
+		PORTD &= ~_BV(PD7);
+		
 	}
 }
 
@@ -669,6 +716,9 @@ static __attribute__((__signal__, __used__)) GCC_ATTR_OPTIMIZE("O3") void edge_r
 	static uint8_t c_byte;
 	uint16_t local_bit_num = sx_nxt_bit_num;
 	uint8_t lc_byte;
+
+	/* debug led on */
+	PORTD |= _BV(PD7);
 
 	/* compiletime_assert(0 == SX_FRAME_BIT % UINT8_T_BIT) */
 
@@ -696,6 +746,8 @@ static __attribute__((__signal__, __used__)) GCC_ATTR_OPTIMIZE("O3") void edge_r
 	}
 	/* write bit number back */
 	sx_nxt_bit_num = local_bit_num;
+	
+	
 }
 
 

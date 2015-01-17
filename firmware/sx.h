@@ -33,6 +33,7 @@
 
 #include <avr/io.h>
 #include <inttypes.h>
+#include <stdbool.h>
 
 // define arduino pins
 
@@ -74,14 +75,22 @@ enum sx_internal_state
 
 enum sx_internal_state sx_get_state(void);
 
-#ifdef REVOKE_SYNC_ON_USB_INTERRUPT
+/* draufer */
+//#ifdef REVOKE_SYNC_ON_USB_INTERRUPT
 void sx_revoke_sync(void);
-#endif
+//#endif
+void sx_enable_interrupts (void);
+void sx_disable_interrupts (void);
+
 
 void    sx_init(void);
 uint8_t sx_get_channel(uint8_t);
 void    sx_set_channel(uint8_t, uint8_t);
-void    sx_tick(void);
+enum sx_internal_state sx_tick(void);
+
+void wait_for_full_transmission_init(void);
+bool wait_for_full_transmission(void);
+
 
 uint8_t* sx_get_data_pointer();
 uint16_t sx_get_data_size();

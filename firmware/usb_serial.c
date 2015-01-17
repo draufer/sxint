@@ -441,6 +441,17 @@ volatile uint8_t sx_cdc_line_rtsdtr=0;
  *
  **************************************************************************/
 
+/* draufer */
+void usb_enable_interrupts(void) {
+	UDIEN = _BV(EORSTE)|_BV(SOFE);
+}
+
+/* draufer */
+void usb_disable_interrupts(void) {
+	UDIEN &= ~(_BV(EORSTE)|_BV(SOFE));
+}
+
+
 /* initialize USB serial */
 void usb_init(void)
 {

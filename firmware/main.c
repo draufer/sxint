@@ -41,9 +41,7 @@
 #define LED_OFF     (PORTD &= ~(1<<6))
 #define CPU_PRESCALE(n) (CLKPR = 0x80, CLKPR = (n))
 
-#ifdef CMDBUF
-#define CMDBUF_SIZE 128
-#endif
+#define CMDBUF_SIZE 32
 
 enum serial_state
 {
@@ -56,8 +54,6 @@ enum serial_state
 
 uint8_t recv_str(char *buf, uint8_t size);
 void parse_and_execute_command(const char *buf, uint8_t num);
-
-#ifdef CMDBUF
 
 /* Create a command buffer */
 int cmdbuf_start = 0; /* Start position in cmdbuf ring buffer */
@@ -89,35 +85,45 @@ int cmdbuf_pop(uint8_t* cmd, uint8_t* value1, uint8_t* value2) {
 	}
 	return -1;
 }
-#endif
+
+/* draufer */
+void switch_to_sx (void) {
+	cli();
+	usb_disable_interrupts();
+	sx_revoke_sync();
+	sx_enable_interrupts();
+	sei();
+}
+
+void switch_to_usb (void) {
+	cli();
+	sx_disable_interrupts();
+	usb_enable_interrupts();
+	sei();
+}
 
 
 // SX Base Function (Read) Implementation Test
 int main(void)
 {
-    //char buf[32];
-    //uint8_t n;
-    //uint16_t counter = 0;
     enum serial_state serial_command_state = WAIT;
     int16_t r;
     uint8_t ser_addr = 0;
-#ifdef CMDBUF
-	uint8_t cmd, value1, value2;
-#endif
+	uint8_t v, cmd, value1, value2;
     cli();
     DDRC |= _BV(PC7)|_BV(PC6);
+	DDRD |= _BV(PD7);
     CPU_PRESCALE(0);
     sx_init();
     usb_init();
+	switch_to_usb();
     sei();
     while (1) {
-        sx_tick();
+        //sx_tick();
         
         /* Serial Communication State Machine */
         r = usb_serial_getchar();
         if (r != -1) {
-			
-#ifdef CMDBUF
             switch(serial_command_state)
             {
                 case WAIT:
@@ -152,63 +158,42 @@ int main(void)
 					cmdbuf_push('=', ser_addr, r);
                     serial_command_state = WAIT;
                 break;
-            }
-#else					
-            switch(serial_command_state)
-            {
-                case WAIT:
-                    if (r == '?')
-                        serial_command_state = READ;
-                    else if (r == '=')
-                        serial_command_state = WRITE_ADDRESS;
-                    else if (r == '#') {
-					    usb_serial_putchar(sx_get_state());
-					}
-					//else if (r == '*')
-					//	serial_command_state = READ_ALL;
-                break;
-                
-                case READ:
-					usb_serial_putchar(sx_get_channel((uint8_t)r));
-                    serial_command_state = WAIT;
-                break;
- 
-                //case READ_ALL:
-                //	usb_serial_write(sx_get_data_pointer() ,/*sx_get_data_size()*/ 4);
-				//	usb_serial_putchar('\n');
-				//	serial_command_state = WAIT;
-                //break;
-                
-                case WRITE_ADDRESS:
-                    ser_addr = (uint8_t)r;
-                    serial_command_state = WRITE_VALUE;
-                break;
-                
-                case WRITE_VALUE:
-                    sx_set_channel(ser_addr, (uint8_t)r);
-                    serial_command_state = WAIT;
-                break;
-            }
-#endif			
-			
+            }			
         }
-#ifdef CMDBUF
-		/* TODO: 6: This is not nice, bad to read. (SX_CONTROL_SYNC == 6)... */
-		if ((cmdbuf_length > 0) && (sx_get_state() == 6)) {
-			cmdbuf_pop(&cmd, &value1, &value2);
-			switch(cmd){
-				case '?':
-					usb_serial_putchar(sx_get_channel(value1));
-				break;
-				case '=':
-					sx_set_channel(value1, value2);
-				break;				
-				case '#':
-					usb_serial_putchar(sx_get_state());
-				break;
-			}
-		}
-#endif
-    }
 
+		// Process command buffer
+		if (cmdbuf_length > 0) {
+			switch_to_sx();
+			while (cmdbuf_length > 0) {
+				
+				if (sx_tick() == SX_CONTROL_SYNC) {
+					cmdbuf_pop(&cmd, &value1, &value2);
+					switch(cmd){
+						case '?':
+							v = sx_get_channel(value1);
+							switch_to_usb();
+							usb_serial_putchar(v);
+							switch_to_sx();
+						break;
+						case '=':
+							sx_set_channel(value1, value2);
+							wait_for_full_transmission_init();
+							while(!wait_for_full_transmission())
+								/* nop */;
+							switch_to_usb();
+							usb_serial_putchar('!');
+							switch_to_sx();
+						break;				
+						case '#':
+							v = sx_get_state();
+							switch_to_usb();
+							usb_serial_putchar(v);
+							switch_to_sx();
+						break;
+					}
+				} // else nop and wait for sync
+			}
+			switch_to_usb();
+		}
+    }
 }
